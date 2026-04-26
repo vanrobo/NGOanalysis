@@ -25,7 +25,7 @@ if uploaded_file:
     df = pd.read_csv(uploaded_file)
     df['Full_Name'] = df['First_Name'] + " " + df['Last_Name']
     
-    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9, tab10, tab11 = st.tabs([
         "🎯 Event Matchmaker", 
         "👤 Volunteer Profile", 
         "🎓 Career Advisor",
@@ -34,7 +34,9 @@ if uploaded_file:
         "📊 Impact Analyzer",
         "💬 Career Chatbot",
         "🎤 AI Mock Interviewer",
-        "🧘 Wellbeing Check"
+        "🧘 Wellbeing Check",
+        "🕵️ AI Skill Discovery",
+        "🧠 NGO Database Copilot"
     ])
 
     # ============ TAB 1: EVENT MATCHMAKER ============
@@ -361,6 +363,77 @@ if uploaded_file:
                     messages=[{"role": "user", "content": wb_prompt}]
                 )
                 st.success(wb_res.choices[0].message.content)
+
+    # ============ TAB 10: AI SKILL DISCOVERY ============
+    with tab10:
+        st.subheader("🕵️ AI Skill Discovery")
+        st.write("Let the AI interview you to discover hidden skills and passions!")
+        discovery_name = st.text_input("Enter your name to start:", key="discovery_name")
+        
+        if discovery_name:
+            session_key = f"discovery_msgs_{discovery_name}"
+            if session_key not in st.session_state:
+                st.session_state[session_key] = [
+                    {"role": "assistant", "content": f"Hi {discovery_name}! I'm here to help uncover some of your hidden skills. To start, what's a hobby you lose track of time doing?"}
+                ]
+            
+            for msg in st.session_state[session_key]:
+                with st.chat_message(msg["role"]):
+                    st.markdown(msg["content"])
+                    
+            if prompt := st.chat_input("Your answer..."):
+                st.session_state[session_key].append({"role": "user", "content": prompt})
+                with st.chat_message("user"):
+                    st.markdown(prompt)
+                    
+                with st.chat_message("assistant"):
+                    sys_prompt = "You are a friendly, proactive AI interviewer for an NGO. Your goal is to ask 1 follow-up question at a time to discover the user's hidden skills based on their hobbies and experiences. Keep responses short and conversational. Do not list skills yet, just dig deeper."
+                    messages = [{"role": "system", "content": sys_prompt}] + st.session_state[session_key]
+                    res = client.chat.completions.create(model="llama-3.3-70b-versatile", messages=messages)
+                    ai_reply = res.choices[0].message.content
+                    st.markdown(ai_reply)
+                    st.session_state[session_key].append({"role": "assistant", "content": ai_reply})
+            
+            if st.button("Generate Skill Profile", key="gen_skill_profile"):
+                with st.spinner("Analyzing conversation..."):
+                    eval_prompt = "Based on this conversation, list 3 unexpected professional skills this person has, and how they can be used in an NGO:\n" + "\n".join([f"{m['role']}: {m['content']}" for m in st.session_state[session_key]])
+                    eval_res = client.chat.completions.create(model="llama-3.3-70b-versatile", messages=[{"role": "user", "content": eval_prompt}])
+                    st.success(eval_res.choices[0].message.content)
+            
+            if st.button("Restart Discovery", key="restart_discovery"):
+                del st.session_state[session_key]
+                st.rerun()
+
+    # ============ TAB 11: NGO DATABASE COPILOT ============
+    with tab11:
+        st.subheader("🧠 NGO Database Copilot")
+        st.write("Ask anything about your entire volunteer database.")
+        
+        if "copilot_msgs" not in st.session_state:
+            st.session_state.copilot_msgs = []
+            
+        for msg in st.session_state.copilot_msgs:
+            with st.chat_message(msg["role"]):
+                st.markdown(msg["content"])
+                
+        if prompt := st.chat_input("E.g., Who are the top 3 volunteers by attendance?"):
+            st.session_state.copilot_msgs.append({"role": "user", "content": prompt})
+            with st.chat_message("user"):
+                st.markdown(prompt)
+                
+            with st.chat_message("assistant"):
+                # Safe subset of data for context
+                context_df = df[['First_Name', 'Skills', 'Interests', 'Attendance_Rate', 'Has_Vehicle']].to_csv(index=False)
+                sys_prompt = f"You are the NGO Organizer Copilot. You help the organizer manage volunteers. Here is the database context:\n{context_df}\nAnswer the user's question based strictly on this data."
+                messages = [{"role": "system", "content": sys_prompt}] + st.session_state.copilot_msgs
+                res = client.chat.completions.create(model="llama-3.3-70b-versatile", messages=messages)
+                ai_reply = res.choices[0].message.content
+                st.markdown(ai_reply)
+                st.session_state.copilot_msgs.append({"role": "assistant", "content": ai_reply})
+                
+        if st.button("Clear Copilot Chat", key="clear_copilot"):
+            st.session_state.copilot_msgs = []
+            st.rerun()
 
 else:
     st.info("📤 Please upload your volunteer CSV to unlock all features!")
