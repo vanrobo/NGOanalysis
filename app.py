@@ -25,13 +25,16 @@ if uploaded_file:
     df = pd.read_csv(uploaded_file)
     df['Full_Name'] = df['First_Name'] + " " + df['Last_Name']
     
-    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9 = st.tabs([
         "🎯 Event Matchmaker", 
         "👤 Volunteer Profile", 
         "🎓 Career Advisor",
         "🛣️ Skill Roadmap",
         "🤝 Mentorship Matcher",
-        "📊 Impact Analyzer"
+        "📊 Impact Analyzer",
+        "💬 Career Chatbot",
+        "🎤 AI Mock Interviewer",
+        "🧘 Wellbeing Check"
     ])
 
     # ============ TAB 1: EVENT MATCHMAKER ============
@@ -272,6 +275,92 @@ if uploaded_file:
                 )
                 
                 st.success(response.choices[0].message.content)
+
+    # ============ TAB 7: CAREER CHATBOT ============
+    with tab7:
+        st.subheader("💬 Interactive Career Chatbot")
+        st.write("Have an ongoing conversation with AI about your career options.")
+        chat_volunteer = st.selectbox("Select Volunteer for Chat:", df['Full_Name'].unique(), key="chat_select")
+        
+        if chat_volunteer:
+            person = df[df['Full_Name'] == chat_volunteer].iloc[0]
+            
+            # Initialize chat history uniquely for the user
+            session_key = f"messages_{person['Volunteer_ID']}"
+            if session_key not in st.session_state:
+                st.session_state[session_key] = []
+            
+            # Display chat messages from history on app rerun
+            for message in st.session_state[session_key]:
+                with st.chat_message(message["role"]):
+                    st.markdown(message["content"])
+            
+            # Accept user input
+            if prompt := st.chat_input(f"Ask anything about your career, {person['First_Name']}..."):
+                st.session_state[session_key].append({"role": "user", "content": prompt})
+                with st.chat_message("user"):
+                    st.markdown(prompt)
+                
+                with st.chat_message("assistant"):
+                    sys_prompt = f"You are a helpful career advisor for {person['First_Name']} who has skills: {person['Skills']} and interests: {person['Interests']}."
+                    messages = [{"role": "system", "content": sys_prompt}] + st.session_state[session_key]
+                    
+                    response = client.chat.completions.create(
+                        model="llama-3.3-70b-versatile",
+                        messages=messages
+                    )
+                    ai_reply = response.choices[0].message.content
+                    st.markdown(ai_reply)
+                    st.session_state[session_key].append({"role": "assistant", "content": ai_reply})
+            
+            if st.button("Clear Chat", key="clear_chat"):
+                st.session_state[session_key] = []
+                st.rerun()
+
+    # ============ TAB 8: AI MOCK INTERVIEWER ============
+    with tab8:
+        st.subheader("🎤 AI Mock Interviewer")
+        st.write("Practice for your next role with personalized AI interviews.")
+        interview_volunteer = st.selectbox("Select Volunteer for Interview:", df['Full_Name'].unique(), key="interview_select")
+        target_role = st.text_input("Target Role for Interview:", value="Project Coordinator", key="interview_role")
+        
+        if interview_volunteer and st.button("Generate Interview Question", key="interview_btn"):
+            person = df[df['Full_Name'] == interview_volunteer].iloc[0]
+            with st.spinner("Preparing question..."):
+                int_prompt = f"Volunteer: {person['First_Name']}, Skills: {person['Skills']}. They are applying for {target_role}. Generate a challenging but fair interview question."
+                res = client.chat.completions.create(
+                    model="llama-3.3-70b-versatile",
+                    messages=[{"role": "user", "content": int_prompt}]
+                )
+                st.session_state["current_question"] = res.choices[0].message.content
+                
+        if "current_question" in st.session_state:
+            st.info(st.session_state["current_question"])
+            user_answer = st.text_area("Your Answer:", key="interview_answer")
+            if st.button("Evaluate Answer", key="eval_btn"):
+                with st.spinner("Evaluating..."):
+                    eval_prompt = f"Question: {st.session_state['current_question']}\nAnswer: {user_answer}\nProvide constructive feedback and a score out of 10."
+                    eval_res = client.chat.completions.create(
+                        model="llama-3.3-70b-versatile",
+                        messages=[{"role": "user", "content": eval_prompt}]
+                    )
+                    st.success(eval_res.choices[0].message.content)
+
+    # ============ TAB 9: WELLBEING & BURNOUT CHECK ============
+    with tab9:
+        st.subheader("🧘 Wellbeing & Burnout Predictor")
+        st.write("Check your wellbeing and get personalized tips to maintain balance.")
+        wellbeing_volunteer = st.selectbox("Select Volunteer for Wellbeing Check:", df['Full_Name'].unique(), key="wellbeing_select")
+        
+        if wellbeing_volunteer and st.button("Analyze Wellbeing", key="wellbeing_btn"):
+            person = df[df['Full_Name'] == wellbeing_volunteer].iloc[0]
+            with st.spinner("Analyzing..."):
+                wb_prompt = f"Analyze burnout risk for:\nName: {person['First_Name']}\nAttendance Rate: {person['Attendance_Rate']}\nPreferred Days: {person['Preferred_Days']}\n\nProvide:\n1. A Burnout Risk Level (Low/Medium/High)\n2. Key observations based on attendance and availability\n3. 3 personalized actionable wellness tips"
+                wb_res = client.chat.completions.create(
+                    model="llama-3.3-70b-versatile",
+                    messages=[{"role": "user", "content": wb_prompt}]
+                )
+                st.success(wb_res.choices[0].message.content)
 
 else:
     st.info("📤 Please upload your volunteer CSV to unlock all features!")
