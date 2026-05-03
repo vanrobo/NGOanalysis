@@ -73,8 +73,8 @@ def process(raw):
     else:
         # Standardize Role names for consistency and cleaner UI
         df['Role'] = df['Role'].replace({
-            'Intern-Manager': 'Manager', 
-            'INTERN-MGR': 'Manager', 
+            'Intern': 'Intern', 
+            'INTERN': 'Intern', 
             'Volunteer': 'Volunteer',
             'VOLUNTEER': 'Volunteer'
         })
