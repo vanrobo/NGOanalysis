@@ -321,10 +321,11 @@ elif page == "Unit Logistics":
     with c_left:
         st.subheader("Event Configuration")
         event_name   = st.text_input("Event Name",   "Annual Food Drive")
-        event_dur    = st.selectbox("Duration",["4 hours","6 hours","8 hours","Full Day"])
-        shift_size   = st.selectbox("Shift Blocks",["2 hours","4 hours","6 hours"])
-        nbhd_filter  = st.selectbox("Region Filter",["All Regions"] + neighborhoods)
-        max_slots    = st.number_input("Volunteer Slots", min_value=5, value=30, step=5)
+        event_dur    = st.selectbox("Duration", ["4 hours", "6 hours", "8 hours", "Full Day"])
+        shift_size   = st.selectbox("Shift Blocks", ["2 hours", "4 hours", "6 hours"])
+        nbhd_filter  = st.selectbox("Region Filter", ["All Regions"] + neighborhoods)
+        max_slots    = st.number_input("Volunteer Slots Needed", min_value=5, value=30, step=5)
+        squad_size   = st.number_input("Target Squad Size", min_value=2, value=10, step=1)
         roles_needed = st.multiselect("Event Roles",[
             "General Labor","Drivers","Medics","Food Handlers",
             "Coordinators","Registration","Security","Media",
@@ -334,28 +335,48 @@ elif page == "Unit Logistics":
         st.subheader("Workforce Preview")
         filtered = df.copy() if nbhd_filter == "All Regions" else df[df['Neighborhood'] == nbhd_filter].copy()
         
-        n_vol = len(filtered)
-        n_squads = max(n_vol // 10, 1)
+        # LOGIC FIX: Base math on the slots needed, not the total database
+        pool_size = len(filtered)
+        actual_slots = min(int(max_slots), pool_size) # Don't request more than we have
+        
+        # Calculate exactly how many squads are needed for the requested slots
+        n_squads = (actual_slots // squad_size) + (1 if actual_slots % squad_size > 0 else 0)
+        n_squads = max(n_squads, 1)
 
         p1, p2, p3 = st.columns(3)
-        p1.metric("Available Volunteers", n_vol)
-        p2.metric("Estimated Squads", n_squads)
-        p3.metric("Est. Squad Size", f"{max(n_vol // n_squads, 1)}")
+        p1.metric("Available in Region", pool_size)
+        p2.metric("Event Slots", actual_slots)
+        p3.metric("Required Squads", n_squads)
 
+        # Show top candidates that will likely be picked
+        top_candidates = filtered.sort_values('Att_Float', ascending=False).head(actual_slots)
         st.dataframe(
-            filtered[['Volunteer_ID','Full_Name','Skills','Preferred_Days','Attendance_Rate']],
+            top_candidates[['Volunteer_ID','Full_Name','Skills','Preferred_Days','Attendance_Rate']],
             use_container_width=True, hide_index=True, height=240
         )
 
-        st.subheader("Standard Squad Structure")
-        sq_names =[f"Squad {chr(65+i)}" for i in range(min(n_squads, 8))]
+        st.subheader("Event Squad Structure")
+        
+        # Build realistic chart data based on remainder math
+        squad_sizes =[]
+        rem = actual_slots
+        for i in range(n_squads):
+            if rem >= squad_size:
+                squad_sizes.append(squad_size)
+                rem -= squad_size
+            elif rem > 0:
+                squad_sizes.append(rem)
+                
+        sq_names =[f"Squad {chr(65+i)}" for i in range(len(squad_sizes))]
+        
         fig_sq = go.Figure()
-        fig_sq.add_bar(name='Volunteers', x=sq_names, y=[10]*len(sq_names), marker_color='#58a6ff')
+        fig_sq.add_bar(name='Volunteers', x=sq_names, y=squad_sizes, marker_color='#58a6ff')
         fig_sq.update_layout(
             barmode='stack', 
-            title='10 VOLUNTEERS PER SQUAD', 
+            title=f'{actual_slots} VOLUNTEERS ACROSS {n_squads} SQUADS', 
             margin=dict(t=30, b=0, l=0, r=0), 
-            height=250
+            height=250,
+            yaxis=dict(range=[0, squad_size + 2]) # Keep Y-axis scaled nicely
         )
         st.plotly_chart(fig_sq, use_container_width=True)
 
@@ -363,14 +384,13 @@ elif page == "Unit Logistics":
 
     if st.button("Generate Squad Schedule", type="primary"):
         with st.spinner("Structuring squads and shifts..."):
-            pool_top  = filtered.nlargest(int(max_slots), 'Att_Float')
-            safe_pool = pool_top[['Volunteer_ID','Skills','Preferred_Days','Att_Float']].copy()
+            safe_pool = top_candidates[['Volunteer_ID','Skills','Preferred_Days','Att_Float']].copy()
             ai_out = call_ai(f"""
 EVENT: {event_name} | DURATION: {event_dur} | SHIFT BLOCKS: {shift_size}
 ROLES: {', '.join(roles_needed)}
-RULE: Organize into groups of roughly 10 Volunteers each.
+RULE: Organize exactly {actual_slots} Volunteers into {n_squads} squads (max {squad_size} per squad).
 
-POOL:
+POOL (Top {actual_slots} candidates):
 {safe_pool.to_csv(index=False)}
 
 OUTPUT — use these exact section headers:
@@ -394,11 +414,9 @@ A brief summary paragraph of the plan.
         st.subheader("Selected Personnel Roster")
         found = list(set(re.findall(r'V-\d{3}', ai_out)))
         if found:
-            roster = df[df['Volunteer_ID'].isin(found)][
-                ['Volunteer_ID','Full_Name','Phone_Number','Skills','Neighborhood']
+            roster = df[df['Volunteer_ID'].isin(found)][['Volunteer_ID','Full_Name','Phone_Number','Skills','Neighborhood']
             ].copy()
             st.dataframe(roster, use_container_width=True, hide_index=True)
-
 # ════════════════════════════════════════════════════════════════════════════
 #  04 · VOLUNTEER ANALYTICS
 # ════════════════════════════════════════════════════════════════════════════
