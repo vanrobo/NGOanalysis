@@ -1,849 +1,833 @@
 import streamlit as st
 import pandas as pd
 from groq import Groq
-import os
-import re
+import os, re
 from dotenv import load_dotenv
 
 load_dotenv()
 
 st.set_page_config(
-    page_title="NGO Operations Command Center",
-    page_icon="🎯",
+    page_title="NGO COMMAND CENTER",
+    page_icon="◎",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# ─── STYLING ────────────────────────────────────────────────────────────────
+# ─── MONOCHROME DESIGN SYSTEM ────────────────────────────────────────────────
 st.markdown("""
 <style>
-    @import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Inter:wght@300;400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Space+Mono:ital,wght@0,400;0,700;1,400&display=swap');
 
-    html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
+*, *::before, *::after { font-family: 'Space Mono', monospace !important; box-sizing: border-box; }
+html, body { background: #050505; color: #e0e0e0; }
+.stApp { background: #050505; }
+.main .block-container { background: #050505; padding: 1.5rem 2rem 3rem 2rem; max-width: 100%; }
 
-    /* Sidebar */
-    section[data-testid="stSidebar"] {
-        background: linear-gradient(180deg, #0a1628 0%, #0d1f3c 50%, #0a1628 100%);
-        border-right: 1px solid #1e3a5f;
-    }
-    section[data-testid="stSidebar"] * { color: #c8d8e8 !important; }
-    section[data-testid="stSidebar"] .stRadio > label {
-        font-family: 'Space Mono', monospace !important;
-        font-size: 11px !important;
-        letter-spacing: 2px !important;
-        color: #4a7fa5 !important;
-        text-transform: uppercase;
-    }
-    section[data-testid="stSidebar"] .stRadio div[role="radiogroup"] label {
-        font-size: 14px !important;
-        letter-spacing: 0 !important;
-        text-transform: none !important;
-        color: #c8d8e8 !important;
-        padding: 8px 4px;
-    }
-    section[data-testid="stSidebar"] .stRadio div[role="radiogroup"] label:has(input:checked) {
-        color: #4fc3f7 !important;
-        font-weight: 600 !important;
-    }
+/* Sidebar */
+section[data-testid="stSidebar"] {
+    background: #000 !important;
+    border-right: 1px solid #1c1c1c;
+    min-width: 210px !important; max-width: 210px !important;
+}
+section[data-testid="stSidebar"] > div { padding: 1.4rem 1rem; }
+section[data-testid="stSidebar"] * { color: #c0c0c0 !important; }
+section[data-testid="stSidebar"] .stRadio > label {
+    font-size: 9px !important; letter-spacing: 3px !important;
+    color: #333 !important; text-transform: uppercase; margin-bottom: 8px; display: block;
+}
+section[data-testid="stSidebar"] .stRadio div[role="radiogroup"] label {
+    font-size: 12px !important; color: #666 !important;
+    padding: 6px 0 6px 10px; border-left: 2px solid transparent; margin: 2px 0;
+}
+section[data-testid="stSidebar"] .stRadio div[role="radiogroup"] label:has(input:checked) {
+    color: #f0f0f0 !important; border-left: 2px solid #f0f0f0 !important;
+}
+section[data-testid="stSidebar"] .stFileUploader label {
+    font-size: 9px !important; letter-spacing: 2px !important;
+    color: #333 !important; text-transform: uppercase;
+}
+section[data-testid="stSidebar"] .stFileUploader [data-testid="stFileUploaderDropzone"] {
+    background: #0a0a0a !important; border: 1px dashed #2a2a2a !important; border-radius: 0 !important;
+}
+section[data-testid="stSidebar"] hr { border-color: #1c1c1c; margin: 1rem 0; }
 
-    /* Main background */
-    .main .block-container {
-        background-color: #060e1a;
-        padding-top: 1.5rem;
-    }
-    .stApp { background-color: #060e1a; }
+/* Inputs */
+.stSelectbox > label, .stTextInput > label, .stNumberInput > label,
+.stSlider > label, .stMultiSelect > label, .stCheckbox > label, .stTextArea > label {
+    font-size: 9px !important; letter-spacing: 2px !important;
+    color: #444 !important; text-transform: uppercase !important;
+}
+.stSelectbox [data-baseweb="select"] > div, .stTextInput input,
+.stNumberInput input, .stTextArea textarea {
+    background: #0c0c0c !important; border: 1px solid #222 !important;
+    border-radius: 0 !important; color: #e0e0e0 !important; font-size: 12px !important;
+}
+[data-baseweb="popover"] { background: #111 !important; border: 1px solid #222 !important; }
+[data-baseweb="menu"] { background: #111 !important; }
+[data-baseweb="menu"] li { color: #c0c0c0 !important; font-size: 12px !important; }
+[data-baseweb="menu"] li:hover { background: #1c1c1c !important; }
+[data-baseweb="tag"] {
+    background: #1a1a1a !important; border: 1px solid #333 !important; border-radius: 0 !important;
+}
+[data-baseweb="tag"] span { color: #c0c0c0 !important; font-size: 11px !important; }
 
-    /* Page title bar */
-    .page-header {
-        background: linear-gradient(90deg, #0d1f3c 0%, #112240 100%);
-        border-left: 4px solid #4fc3f7;
-        border-bottom: 1px solid #1e3a5f;
-        padding: 16px 24px;
-        border-radius: 0 8px 8px 0;
-        margin-bottom: 24px;
-    }
-    .page-header h2 { margin: 0; color: #e8f4fd; font-size: 1.4em; font-weight: 600; }
-    .page-header p { margin: 4px 0 0 0; color: #5a8ab0; font-size: 0.85em; }
+/* Buttons */
+.stButton > button {
+    background: #0c0c0c !important; border: 1px solid #2a2a2a !important;
+    color: #888 !important; border-radius: 0 !important;
+    font-size: 10px !important; letter-spacing: 2px !important;
+    text-transform: uppercase !important; padding: 8px 18px !important;
+}
+.stButton > button:hover {
+    background: #1a1a1a !important; border-color: #666 !important; color: #e0e0e0 !important;
+}
+.stButton > button[kind="primary"] {
+    background: #e0e0e0 !important; border-color: #e0e0e0 !important; color: #050505 !important;
+}
+.stButton > button[kind="primary"]:hover {
+    background: #fff !important; border-color: #fff !important;
+}
 
-    /* KPI Cards */
-    .kpi-row { display: flex; gap: 16px; margin-bottom: 24px; flex-wrap: wrap; }
-    .kpi-card {
-        flex: 1; min-width: 140px;
-        background: linear-gradient(135deg, #0d1f3c 0%, #112240 100%);
-        border: 1px solid #1e3a5f;
-        border-top: 3px solid #4fc3f7;
-        border-radius: 10px;
-        padding: 20px 16px;
-        text-align: center;
-    }
-    .kpi-number {
-        font-family: 'Space Mono', monospace;
-        font-size: 2em; font-weight: 700;
-        color: #4fc3f7; display: block; line-height: 1;
-    }
-    .kpi-label { font-size: 0.75em; color: #5a8ab0; text-transform: uppercase; letter-spacing: 1.5px; margin-top: 6px; display: block; }
-    .kpi-sub { font-size: 0.7em; color: #3a6080; margin-top: 2px; display: block; }
+/* Metrics */
+div[data-testid="metric-container"] {
+    background: #0a0a0a; border: 1px solid #1c1c1c; border-radius: 0; padding: 14px;
+}
+div[data-testid="metric-container"] label {
+    font-size: 9px !important; letter-spacing: 2px !important;
+    color: #444 !important; text-transform: uppercase !important;
+}
+div[data-testid="metric-container"] [data-testid="metric-value"] {
+    font-size: 1.7em !important; color: #e0e0e0 !important;
+}
+div[data-testid="metric-container"] [data-testid="metric-delta"] { font-size: 10px !important; }
 
-    /* Section dividers */
-    .section-label {
-        font-family: 'Space Mono', monospace;
-        font-size: 10px; letter-spacing: 3px; text-transform: uppercase;
-        color: #2a5070; border-bottom: 1px solid #1e3a5f;
-        padding-bottom: 6px; margin: 24px 0 12px 0;
-    }
+/* Tabs */
+.stTabs [data-baseweb="tab-list"] {
+    background: #000 !important; border-bottom: 1px solid #1c1c1c !important; gap: 0 !important;
+}
+.stTabs [data-baseweb="tab"] {
+    background: transparent !important; color: #444 !important; border-radius: 0 !important;
+    font-size: 10px !important; letter-spacing: 2px !important;
+    text-transform: uppercase !important; padding: 10px 20px !important;
+    border-bottom: 2px solid transparent !important;
+}
+.stTabs [aria-selected="true"] {
+    color: #e0e0e0 !important; border-bottom: 2px solid #e0e0e0 !important; background: transparent !important;
+}
+.stTabs [data-baseweb="tab-panel"] { background: #050505 !important; padding-top: 20px !important; }
 
-    /* Status badges */
-    .badge {
-        display: inline-block; padding: 2px 8px; border-radius: 3px;
-        font-size: 0.72em; font-weight: 600; font-family: 'Space Mono', monospace;
-        letter-spacing: 0.5px;
-    }
-    .badge-intern { background: #0d2a1a; color: #52d68a; border: 1px solid #2a7a4a; }
-    .badge-volunteer { background: #0d1f3a; color: #4fc3f7; border: 1px solid #2a5a8a; }
-    .badge-risk { background: #2a0d0d; color: #f77; border: 1px solid #7a2a2a; }
-    .badge-promo { background: #2a2a0d; color: #ffd740; border: 1px solid #7a7a0d; }
+/* DataFrames */
+.stDataFrame { border: 1px solid #1c1c1c !important; border-radius: 0 !important; }
 
-    /* Alert box */
-    .alert-box {
-        background: #0d1f0d; border: 1px solid #2a5a2a; border-left: 4px solid #52d68a;
-        border-radius: 6px; padding: 12px 16px; margin: 12px 0;
-        color: #a0d8a0; font-size: 0.88em;
-    }
-    .warning-box {
-        background: #2a1a0d; border: 1px solid #7a4a0d; border-left: 4px solid #ffa040;
-        border-radius: 6px; padding: 12px 16px; margin: 12px 0;
-        color: #d4a060; font-size: 0.88em;
-    }
+/* Chat */
+[data-testid="stChatMessage"] {
+    background: #0a0a0a !important; border: 1px solid #1c1c1c !important; border-radius: 0 !important;
+}
+[data-testid="stChatInput"] > div {
+    background: #0a0a0a !important; border: 1px solid #222 !important; border-radius: 0 !important;
+}
+[data-testid="stChatInput"] textarea { background: transparent !important; color: #e0e0e0 !important; }
 
-    /* Streamlit component overrides */
-    div[data-testid="metric-container"] {
-        background: #0d1f3c;
-        border: 1px solid #1e3a5f;
-        border-radius: 8px;
-        padding: 12px;
-    }
-    .stTabs [data-baseweb="tab-list"] { background: #0d1f3c; border-radius: 8px 8px 0 0; gap: 4px; }
-    .stTabs [data-baseweb="tab"] { color: #5a8ab0 !important; font-size: 13px; }
-    .stTabs [aria-selected="true"] { color: #4fc3f7 !important; }
-
-    /* Tables */
-    .stDataFrame { border: 1px solid #1e3a5f !important; border-radius: 8px; }
-
-    /* Buttons */
-    .stButton > button[kind="primary"] {
-        background: linear-gradient(90deg, #1565c0, #0d47a1) !important;
-        border: 1px solid #4fc3f7 !important;
-        color: #e8f4fd !important;
-        font-weight: 600 !important;
-        letter-spacing: 0.5px;
-    }
-    .stButton > button[kind="primary"]:hover {
-        background: linear-gradient(90deg, #1976d2, #1565c0) !important;
-        box-shadow: 0 0 12px rgba(79,195,247,0.3) !important;
-    }
-
-    /* Sidebar logo area */
-    .sidebar-logo {
-        font-family: 'Space Mono', monospace;
-        font-size: 18px; font-weight: 700; color: #4fc3f7;
-        letter-spacing: 1px; margin-bottom: 4px;
-    }
-    .sidebar-sub { font-size: 10px; color: #2a5070; letter-spacing: 3px; text-transform: uppercase; }
-
-    /* AI output card */
-    .ai-output {
-        background: #0a1628;
-        border: 1px solid #1e3a5f;
-        border-radius: 8px;
-        padding: 20px;
-        margin-top: 12px;
-        line-height: 1.7;
-        color: #c8d8e8;
-    }
-
-    div[data-testid="stExpander"] {
-        background: #0d1f3c;
-        border: 1px solid #1e3a5f;
-        border-radius: 8px;
-    }
+/* Custom components */
+.mono-title {
+    font-size: 16px; font-weight: 700; color: #e0e0e0;
+    letter-spacing: 4px; text-transform: uppercase; margin-bottom: 2px;
+}
+.mono-sub { font-size: 10px; color: #333; letter-spacing: 1px; margin-bottom: 20px; }
+.sec-label {
+    font-size: 9px; letter-spacing: 3px; color: #2a2a2a; text-transform: uppercase;
+    border-bottom: 1px solid #111; padding-bottom: 7px; margin: 24px 0 14px 0;
+}
+.stat-block {
+    background: #0a0a0a; border: 1px solid #1c1c1c; padding: 16px; margin-bottom: 1px;
+}
+.stat-block .val { font-size: 26px; font-weight: 700; color: #e0e0e0; display: block; }
+.stat-block .lbl { font-size: 9px; letter-spacing: 2px; color: #444; text-transform: uppercase; margin-top: 2px; display: block; }
+.stat-block .sub { font-size: 10px; color: #2a2a2a; margin-top: 4px; display: block; }
+.info-line {
+    background: #0a0a0a; border: 1px solid #1c1c1c; border-left: 2px solid #555;
+    padding: 9px 13px; font-size: 11px; color: #666; margin: 8px 0;
+}
+.warn-line {
+    background: #0a0a0a; border: 1px solid #1c1c1c; border-left: 2px solid #333;
+    padding: 9px 13px; font-size: 11px; color: #444; margin: 8px 0;
+}
+.ai-block {
+    background: #080808; border: 1px solid #1c1c1c;
+    padding: 20px 24px; margin-top: 14px;
+    line-height: 1.85; color: #bbb; font-size: 12px;
+}
+.hr { border: none; border-top: 1px solid #111; margin: 22px 0; }
 </style>
 """, unsafe_allow_html=True)
 
-# ─── API & MODEL SETUP ───────────────────────────────────────────────────────
+# ─── HELPERS ─────────────────────────────────────────────────────────────────
+def section(label):
+    st.markdown(f'<div class="sec-label">{label}</div>', unsafe_allow_html=True)
+
+def info(msg):
+    st.markdown(f'<div class="info-line">{msg}</div>', unsafe_allow_html=True)
+
+def warn(msg):
+    st.markdown(f'<div class="warn-line">{msg}</div>', unsafe_allow_html=True)
+
+# ─── NEIGHBORHOOD COORDS (Delhi) ─────────────────────────────────────────────
+NBHD_COORDS = {
+    'Paschim Vihar':   (28.6685, 77.0946),
+    'Rohini':          (28.7045, 77.1100),
+    'Dwarka':          (28.5921, 77.0460),
+    'Janakpuri':       (28.6280, 77.0820),
+    'Pitampura':       (28.7031, 77.1300),
+    'Saket':           (28.5220, 77.2090),
+    'Lajpat Nagar':    (28.5707, 77.2430),
+    'Karol Bagh':      (28.6507, 77.1910),
+    'Vasant Kunj':     (28.5226, 77.1590),
+    'Connaught Place': (28.6315, 77.2195),
+}
+MOCK_AREAS = list(NBHD_COORDS.keys())
+
+# ─── PLOTLY MONO BASE ─────────────────────────────────────────────────────────
+import plotly.graph_objects as go
+import plotly.express as px
+
+PBASE = dict(
+    paper_bgcolor='#050505', plot_bgcolor='#050505',
+    font=dict(family='Space Mono', color='#555', size=10),
+    margin=dict(l=0, r=0, t=30, b=0),
+    xaxis=dict(gridcolor='#0f0f0f', linecolor='#1c1c1c', tickcolor='#2a2a2a', tickfont=dict(size=9)),
+    yaxis=dict(gridcolor='#0f0f0f', linecolor='#1c1c1c', tickcolor='#2a2a2a', tickfont=dict(size=9)),
+    legend=dict(bgcolor='#050505', bordercolor='#1c1c1c', borderwidth=1, font=dict(size=9, color='#555')),
+    title_font=dict(size=9, color='#333'),
+)
+
+# ─── API ─────────────────────────────────────────────────────────────────────
 api_key = os.getenv("GROQ_API_KEY") or st.secrets.get("GROQ_API_KEY", "")
 if not api_key:
-    st.error("⚠️ GROQ_API_KEY not found. Set it in .env or Streamlit Secrets.")
+    st.error("GROQ_API_KEY not configured.")
     st.stop()
 
 client = Groq(api_key=api_key)
-MODEL = "llama-3.3-70b-versatile"
+MODEL  = "llama-3.3-70b-versatile"
 
-def call_ai(prompt: str, system: str = None, max_tokens: int = 2048) -> str:
-    """Single AI call helper with optional system prompt."""
-    messages = []
+def call_ai(prompt, system="", max_tokens=2048):
+    msgs = []
     if system:
-        messages.append({"role": "system", "content": system})
-    messages.append({"role": "user", "content": prompt})
-    res = client.chat.completions.create(model=MODEL, messages=messages, max_tokens=max_tokens)
-    return res.choices[0].message.content
+        msgs.append({"role": "system", "content": system})
+    msgs.append({"role": "user", "content": prompt})
+    return client.chat.completions.create(model=MODEL, messages=msgs, max_tokens=max_tokens).choices[0].message.content
 
 # ─── DATA PROCESSING ─────────────────────────────────────────────────────────
-def process_dataframe(raw_df: pd.DataFrame) -> pd.DataFrame:
-    df = raw_df.copy()
+@st.cache_data
+def process(raw):
+    df = raw.copy()
     df['Full_Name'] = df['First_Name'].str.strip() + " " + df['Last_Name'].str.strip()
-
-    # Attendance → float
     if df['Attendance_Rate'].dtype == object:
-        df['Attendance_Float'] = (
-            df['Attendance_Rate'].astype(str)
-            .str.replace('%', '', regex=False)
-            .str.strip()
-            .astype(float)
-        )
-        if df['Attendance_Float'].max() > 1:
-            df['Attendance_Float'] = df['Attendance_Float'] / 100
+        df['Att'] = df['Attendance_Rate'].astype(str).str.replace('%','',regex=False).str.strip().astype(float)
+        if df['Att'].max() > 1: df['Att'] /= 100
     else:
-        df['Attendance_Float'] = df['Attendance_Rate'].astype(float)
-        if df['Attendance_Float'].max() > 1:
-            df['Attendance_Float'] = df['Attendance_Float'] / 100
-
-    # Workforce tier: use 'Role' column if present, else derive from top 20% attendance
+        df['Att'] = df['Attendance_Rate'].astype(float)
+        if df['Att'].max() > 1: df['Att'] /= 100
+        
     if 'Role' not in df.columns:
-        threshold = df['Attendance_Float'].quantile(0.80)
-        df['Role'] = df['Attendance_Float'].apply(
-            lambda x: 'Intern-Manager' if x >= threshold else 'Volunteer'
-        )
-
-    # Neighborhood: use column if present, else cycle through mock ones deterministically
+        t = df['Att'].quantile(0.80)
+        df['Role'] = df['Att'].apply(lambda x: 'INTERN-MGR' if x >= t else 'VOLUNTEER')
+    else:
+        # Standardize Role names for consistency
+        df['Role'] = df['Role'].replace({'Intern-Manager': 'INTERN-MGR', 'Volunteer': 'VOLUNTEER'})
+        
     if 'Neighborhood' not in df.columns:
-        mock_areas = [
-            'Paschim Vihar', 'Rohini', 'Dwarka', 'Janakpuri', 'Pitampura',
-            'Saket', 'Lajpat Nagar', 'Karol Bagh', 'Vasant Kunj', 'Connaught Place'
-        ]
-        df['Neighborhood'] = [mock_areas[i % len(mock_areas)] for i in range(len(df))]
-
+        df['Neighborhood'] = [MOCK_AREAS[i % len(MOCK_AREAS)] for i in range(len(df))]
     return df
 
-def parse_skills(series: pd.Series) -> list[str]:
-    skills = []
-    for val in series.dropna():
-        skills.extend([s.strip() for s in str(val).split(';') if s.strip()])
-    return skills
+def parse_skills(series):
+    out = []
+    for v in series.dropna():
+        out.extend([s.strip() for s in str(v).split(';') if s.strip()])
+    return out
 
 # ─── SIDEBAR ─────────────────────────────────────────────────────────────────
 with st.sidebar:
-    st.markdown('<div class="sidebar-logo">🎯 NGO OPS</div>', unsafe_allow_html=True)
-    st.markdown('<div class="sidebar-sub">Command Center</div>', unsafe_allow_html=True)
-    st.markdown("---")
-
-    page = st.radio(
-        "NAVIGATION",
-        [
-            "📊  Executive Dashboard",
-            "🗺️  Regional Dispatch Agent",
-            "🏗️  Unit Logistics & Shifts",
-            "📈  Growth & Gap Auditor",
-            "🧠  Database Copilot",
-        ],
-    )
-    st.markdown("---")
-    uploaded_file = st.file_uploader("📁 Volunteer Database (CSV)", type="csv")
-
-    if uploaded_file:
-        st.markdown('<div class="alert-box">✅ Database loaded</div>', unsafe_allow_html=True)
-
-    st.markdown("---")
-    st.markdown('<p style="font-size:10px;color:#2a5070;letter-spacing:1px;">EXPECTED COLUMNS<br>Volunteer_ID · First_Name · Last_Name<br>Phone_Number · Email · Interests<br>Skills · Has_Vehicle · Attendance_Rate<br>Preferred_Days<br><br>Optional: Role · Neighborhood</p>', unsafe_allow_html=True)
-
-# ─── NO FILE UPLOADED ────────────────────────────────────────────────────────
-if not uploaded_file:
     st.markdown("""
-    <div style="text-align:center; padding: 60px 20px;">
-        <div style="font-family:'Space Mono',monospace; font-size:48px; color:#4fc3f7; margin-bottom:8px;">🎯</div>
-        <h1 style="color:#e8f4fd; font-size:2.2em; margin:0;">NGO Operations Command Center</h1>
-        <p style="color:#5a8ab0; font-size:1.1em; margin:12px 0 40px 0;">Upload your volunteer database to activate all command modules.</p>
+    <div style="margin-bottom:20px;">
+        <div style="font-size:14px;font-weight:700;letter-spacing:5px;color:#e0e0e0;text-transform:uppercase;">NGO OPS</div>
+        <div style="font-size:9px;letter-spacing:3px;color:#222;text-transform:uppercase;margin-top:3px;">Command Center</div>
     </div>
     """, unsafe_allow_html=True)
+    page = st.radio("Navigation", [
+        "Executive Dashboard",
+        "Regional Dispatch",
+        "Unit Logistics",
+        "Growth Auditor",
+        "Database Copilot",
+    ])
+    st.markdown("<hr>", unsafe_allow_html=True)
+    uploaded_file = st.file_uploader("Volunteer Database", type="csv")
+    if uploaded_file:
+        st.markdown('<div style="font-size:9px;color:#333;letter-spacing:2px;margin-top:8px;">◎ DATABASE ACTIVE</div>', unsafe_allow_html=True)
+    st.markdown("""<hr>
+    <div style="font-size:9px;color:#1c1c1c;letter-spacing:1px;line-height:2;">
+    REQUIRED COLUMNS<br>
+    Volunteer_ID · First_Name<br>Last_Name · Phone_Number<br>
+    Email · Skills · Interests<br>Has_Vehicle · Attendance_Rate<br>Preferred_Days<br><br>
+    OPTIONAL<br>Role · Neighborhood
+    </div>""", unsafe_allow_html=True)
 
-    c1, c2, c3, c4, c5 = st.columns(5)
-    modules = [
-        ("📊", "Executive Dashboard", "Live KPIs, regional density maps, and skill inventory at a glance."),
-        ("🗺️", "Regional Dispatch", "Geofenced recruitment with AI safety-buffer calculations."),
-        ("🏗️", "Unit Logistics", "Auto-structure squads, assign intern leads, generate shift schedules."),
-        ("📈", "Growth Auditor", "Gap analysis, churn prediction, and promotion pipeline."),
-        ("🧠", "Database Copilot", "Strategic Q&A with your AI Ops Director.")
-    ]
-    for col, (icon, name, desc) in zip([c1, c2, c3, c4, c5], modules):
+# ─── LANDING PAGE ────────────────────────────────────────────────────────────
+if not uploaded_file:
+    st.markdown('<br>', unsafe_allow_html=True)
+    st.markdown('<div class="mono-title">NGO Operations Command Center</div>', unsafe_allow_html=True)
+    st.markdown('<div class="mono-sub">Upload your volunteer database via the sidebar to activate all modules.</div>', unsafe_allow_html=True)
+    st.markdown('<div class="hr"></div>', unsafe_allow_html=True)
+    cols = st.columns(5)
+    for col, (num, name, desc) in zip(cols, [
+        ("01", "Executive Dashboard",  "KPIs · Regional density · Skill inventory · Attendance distribution"),
+        ("02", "Regional Dispatch",    "Geofenced recruit · Safety buffer · Broadcast generator · Live map"),
+        ("03", "Unit Logistics",       "Squad structure · 1:10 ratio · Shift schedule · Field playbook"),
+        ("04", "Growth Auditor",       "Skill gaps · Churn predictor · Promotion pipeline"),
+        ("05", "Database Copilot",     "Strategic Q&A · AI Ops Director · Donor impact report"),
+    ]):
         with col:
             st.markdown(f"""
-            <div style="background:#0d1f3c;border:1px solid #1e3a5f;border-top:3px solid #4fc3f7;
-                        border-radius:10px;padding:20px 14px;text-align:center;min-height:160px;">
-                <div style="font-size:2em">{icon}</div>
-                <div style="color:#4fc3f7;font-weight:600;font-size:0.9em;margin:8px 0 6px;">{name}</div>
-                <div style="color:#5a8ab0;font-size:0.78em;line-height:1.4;">{desc}</div>
-            </div>
-            """, unsafe_allow_html=True)
+            <div style="background:#0a0a0a;border:1px solid #1c1c1c;padding:20px 14px;min-height:180px;">
+                <div style="font-size:9px;letter-spacing:3px;color:#222;margin-bottom:10px;">{num}</div>
+                <div style="font-size:11px;font-weight:700;color:#aaa;letter-spacing:1px;margin-bottom:10px;text-transform:uppercase;">{name}</div>
+                <div style="font-size:10px;color:#333;line-height:1.7;">{desc}</div>
+            </div>""", unsafe_allow_html=True)
     st.stop()
 
 # ─── LOAD DATA ───────────────────────────────────────────────────────────────
-df = process_dataframe(pd.read_csv(uploaded_file))
-interns_df   = df[df['Role'] == 'Intern-Manager']
-volunteers_df = df[df['Role'] == 'Volunteer']
-avg_attendance = df['Attendance_Float'].mean()
-neighborhoods  = sorted(df['Neighborhood'].unique().tolist())
+df            = process(pd.read_csv(uploaded_file))
+interns_df    = df[df['Role'] == 'INTERN-MGR']
+volunteers_df = df[df['Role'] == 'VOLUNTEER']
+avg_att       = df['Att'].mean()
+neighborhoods = sorted(df['Neighborhood'].unique().tolist())
 
 # ════════════════════════════════════════════════════════════════════════════
-# PAGE ① — EXECUTIVE DASHBOARD
+#  01 · EXECUTIVE DASHBOARD
 # ════════════════════════════════════════════════════════════════════════════
-if page == "📊  Executive Dashboard":
-    st.markdown("""
-    <div class="page-header">
-        <h2>📊 Executive Dashboard</h2>
-        <p>Live workforce overview · Regional density · Skill inventory</p>
-    </div>
-    """, unsafe_allow_html=True)
+if page == "Executive Dashboard":
+    st.markdown('<div class="mono-title">Executive Dashboard</div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="mono-sub">{len(df)} personnel · {len(neighborhoods)} regions · last updated on upload</div>', unsafe_allow_html=True)
 
-    # — KPI Row —
-    k1, k2, k3, k4, k5 = st.columns(5)
-    ratio = f"1 : {len(volunteers_df) // max(len(interns_df), 1)}"
-    churn_count = len(df[df['Attendance_Float'] < 0.50])
+    # KPI row
+    k = st.columns(5)
+    kpi_data = [
+        (len(df),              "Total Workforce",  f"{len(interns_df)} interns / {len(volunteers_df)} vols"),
+        (len(interns_df),      "Intern-Managers",  "Leadership tier"),
+        (f"{avg_att:.0%}",     "Avg Attendance",   "Operational readiness"),
+        (len(neighborhoods),   "Regions Active",   "Neighborhood coverage"),
+        (len(df[df['Att']<.5]),"At Risk",          "Attendance below 50%"),
+    ]
+    for col, (val, lbl, sub) in zip(k, kpi_data):
+        with col:
+            st.markdown(f'<div class="stat-block"><span class="val">{val}</span><span class="lbl">{lbl}</span><span class="sub">{sub}</span></div>', unsafe_allow_html=True)
 
-    k1.metric("Total Workforce",   len(df))
-    k2.metric("Intern-Managers",   len(interns_df),   delta="Leadership tier")
-    k3.metric("Field Volunteers",  len(volunteers_df))
-    k4.metric("Avg Attendance",    f"{avg_attendance:.0%}", delta="Operational readiness")
-    k5.metric("At-Risk (< 50%)",   churn_count,       delta_color="inverse")
+    st.markdown('<br>', unsafe_allow_html=True)
 
-    st.markdown('<div class="section-label">Regional & Skill Intelligence</div>', unsafe_allow_html=True)
+    section("REGIONAL & SKILL INTELLIGENCE")
+    c1, c2 = st.columns([3, 2])
 
-    left, right = st.columns([3, 2])
+    with c1:
+        region_data = df.groupby(['Neighborhood','Role']).size().reset_index(name='Count')
+        pivot = region_data.pivot(index='Neighborhood', columns='Role', values='Count').fillna(0).reset_index()
+        fig = go.Figure()
+        if 'INTERN-MGR' in pivot.columns:
+            fig.add_bar(name='Intern-Mgr', x=pivot['Neighborhood'], y=pivot['INTERN-MGR'], marker_color='#e0e0e0')
+        if 'VOLUNTEER' in pivot.columns:
+            fig.add_bar(name='Volunteer',  x=pivot['Neighborhood'], y=pivot['VOLUNTEER'],  marker_color='#2a2a2a')
+        fig.update_layout(barmode='stack', title='VOLUNTEER DENSITY BY REGION', **PBASE, height=300)
+        fig.update_xaxes(tickangle=-30)
+        st.plotly_chart(fig, use_container_width=True)
 
-    with left:
-        st.subheader("Regional Volunteer Density")
-        region_summary = (
-            df.groupby(['Neighborhood', 'Role'])
-            .size()
-            .reset_index(name='Count')
-        )
+    with c2:
+        st.markdown('<div style="font-size: 9px; letter-spacing: 3px; color: #2a2a2a; text-transform: uppercase; margin-bottom: 14px;">SKILL INVENTORY — TOP 15</div>', unsafe_allow_html=True)
+        sk = pd.Series(parse_skills(df['Skills'])).value_counts().head(15).reset_index()
+        sk.columns = ['Skill', 'Count']
+        st.dataframe(sk, use_container_width=True, hide_index=True, height=310)
 
-        try:
-            import plotly.express as px
-            fig = px.bar(
-                region_summary, x='Neighborhood', y='Count', color='Role',
-                color_discrete_map={'Intern-Manager': '#52d68a', 'Volunteer': '#4fc3f7'},
-                template='plotly_dark', barmode='stack'
-            )
-            fig.update_layout(
-                plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)',
-                legend=dict(orientation='h', yanchor='bottom', y=1.02),
-                margin=dict(l=0, r=0, t=30, b=0),
-                font=dict(color='#c8d8e8')
-            )
-            fig.update_xaxes(tickangle=-30)
-            st.plotly_chart(fig, use_container_width=True)
-        except ImportError:
-            pivot = region_summary.pivot(index='Neighborhood', columns='Role', values='Count').fillna(0)
-            st.bar_chart(pivot)
+    section("ATTENDANCE & READINESS")
+    c3, c4 = st.columns([2, 3])
 
-        # Attendance distribution
-        st.subheader("Attendance Distribution by Tier")
-        att_bins = pd.cut(df['Attendance_Float'], bins=[0, 0.5, 0.7, 0.85, 1.01],
-                          labels=['<50% (At-Risk)', '50–70%', '70–85%', '>85% (Elite)'])
-        att_summary = att_bins.value_counts().sort_index().reset_index()
-        att_summary.columns = ['Band', 'Count']
-        try:
-            fig2 = px.bar(att_summary, x='Band', y='Count', template='plotly_dark',
-                          color='Count', color_continuous_scale='blues')
-            fig2.update_layout(plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)',
-                               margin=dict(l=0, r=0, t=10, b=0), showlegend=False)
-            st.plotly_chart(fig2, use_container_width=True)
-        except ImportError:
-            st.bar_chart(att_summary.set_index('Band'))
+    with c3:
+        bins  = pd.cut(df['Att'], bins=[0,.4,.6,.8,1.01], labels=['<40%','40-60%','60-80%','>80%'])
+        bdata = bins.value_counts().sort_index().reset_index()
+        bdata.columns = ['Band','Count']
+        fig2 = go.Figure(go.Bar(
+            x=bdata['Band'], y=bdata['Count'],
+            marker_color=['#111','#2a2a2a','#777','#e0e0e0'],
+            marker_line_color='#1c1c1c', marker_line_width=1,
+            text=bdata['Count'], textposition='outside', textfont=dict(size=9, color='#555'),
+        ))
+        fig2.update_layout(title='ATTENDANCE DISTRIBUTION', **PBASE, height=280)
+        st.plotly_chart(fig2, use_container_width=True)
 
-    with right:
-        st.subheader("Skill Inventory")
-        all_skills = parse_skills(df['Skills'])
-        skill_counts = pd.Series(all_skills).value_counts().head(15).reset_index()
-        skill_counts.columns = ['Skill', 'Count']
-        st.dataframe(skill_counts, use_container_width=True, hide_index=True, height=240)
-
-        st.subheader("Regional Readiness")
-        readiness = (
-            df.groupby('Neighborhood')
-            .agg(
-                Headcount=('Volunteer_ID', 'count'),
-                Avg_Att=('Attendance_Float', lambda x: f"{x.mean():.0%}"),
-                Interns=('Role', lambda x: (x == 'Intern-Manager').sum())
-            )
-            .reset_index()
-            .rename(columns={'Avg_Att': 'Avg Att.', 'Interns': 'IM'})
-        )
-        st.dataframe(readiness, use_container_width=True, hide_index=True)
+    with c4:
+        readiness = df.groupby('Neighborhood').agg(
+            Headcount=('Volunteer_ID','count'),
+            Interns=('Role', lambda x: (x=='INTERN-MGR').sum()),
+            Volunteers=('Role', lambda x: (x=='VOLUNTEER').sum()),
+            Avg_Att=('Att', lambda x: f"{x.mean():.0%}"),
+            At_Risk=('Att', lambda x: (x<.5).sum()),
+        ).reset_index()
+        readiness.columns = ['Region','Headcount','IMs','Volunteers','Avg Att.','At Risk']
+        st.dataframe(readiness, use_container_width=True, hide_index=True, height=300)
 
 # ════════════════════════════════════════════════════════════════════════════
-# PAGE ② — REGIONAL DISPATCH AGENT
+#  02 · REGIONAL DISPATCH
 # ════════════════════════════════════════════════════════════════════════════
-elif page == "🗺️  Regional Dispatch Agent":
-    st.markdown("""
-    <div class="page-header">
-        <h2>🗺️ Regional Dispatch Agent</h2>
-        <p>Geofenced recruitment · AI safety-buffer calculation · Broadcast generator</p>
-    </div>
-    """, unsafe_allow_html=True)
+elif page == "Regional Dispatch":
+    st.markdown('<div class="mono-title">Regional Dispatch Agent</div>', unsafe_allow_html=True)
+    st.markdown('<div class="mono-sub">Geofenced recruitment · Safety buffer · AI deployment plan · Live map</div>', unsafe_allow_html=True)
 
-    left, right = st.columns([1, 2])
+    c_left, c_right = st.columns([1, 2], gap="large")
 
-    with left:
-        st.markdown('<div class="section-label">Event Parameters</div>', unsafe_allow_html=True)
-        selected_neighborhood = st.selectbox("📍 Target Neighborhood", ["All Regions"] + neighborhoods)
-        event_name   = st.text_input("Event Name", "Medical Camp – Paschim Vihar")
-        event_date   = st.text_input("Date & Time", "Saturday, 10 AM – 4 PM")
+    with c_left:
+        section("EVENT PARAMETERS")
+        sel_nbhd     = st.selectbox("Target Neighborhood", ["All Regions"] + neighborhoods)
+        event_name   = st.text_input("Event Name",   "Medical Camp")
+        event_date   = st.text_input("Date & Time",  "Saturday, 10 AM – 4 PM")
         target_count = st.number_input("Volunteers Needed (Hard Target)", min_value=1, value=10, step=1)
-        req_skills   = st.text_input("Required Skills (comma-separated)", "First Aid, CPR")
-        req_vehicle  = st.checkbox("Must Have Vehicle 🚗")
+        req_skills   = st.text_input("Required Skills", "First Aid, CPR")
+        req_vehicle  = st.checkbox("Vehicle Required")
 
-        # — Safety Buffer Engine —
-        if selected_neighborhood == "All Regions":
-            local_pool = volunteers_df.copy()
-        else:
-            local_pool = volunteers_df[volunteers_df['Neighborhood'] == selected_neighborhood].copy()
-
-        local_avg = local_pool['Attendance_Float'].mean() if len(local_pool) > 0 else 0.60
+        local_pool    = volunteers_df if sel_nbhd == "All Regions" else volunteers_df[volunteers_df['Neighborhood'] == sel_nbhd].copy()
+        local_avg     = local_pool['Att'].mean() if len(local_pool) > 0 else 0.60
         buffer_target = int(target_count / local_avg) + 1 if local_avg > 0 else target_count * 2
 
-        st.markdown('<div class="section-label">Safety Buffer Engine</div>', unsafe_allow_html=True)
+        section("SAFETY BUFFER ENGINE")
         b1, b2, b3 = st.columns(3)
         b1.metric("Local Avg Att.", f"{local_avg:.0%}")
-        b2.metric("Buffer Target",  buffer_target, help="Auto-calculated: Hard Target ÷ Local Avg Attendance")
-        b3.metric("Local Pool",     len(local_pool))
+        b2.metric("Buffer Target",  buffer_target)
+        b3.metric("Pool Size",      len(local_pool))
 
+        formula = f"Formula: {target_count} ÷ {local_avg:.0%} = {buffer_target}"
         if len(local_pool) < buffer_target:
-            st.markdown(f'<div class="warning-box">⚠️ Local pool ({len(local_pool)}) is smaller than buffer target ({buffer_target}). Agent will flag for cross-region pull.</div>', unsafe_allow_html=True)
-
-    with right:
-        st.markdown(f'<div class="section-label">Local Roster — {selected_neighborhood}</div>', unsafe_allow_html=True)
-        display_pool = local_pool[['Volunteer_ID', 'Full_Name', 'Skills', 'Has_Vehicle', 'Attendance_Rate', 'Preferred_Days']].copy()
-        st.dataframe(display_pool, use_container_width=True, hide_index=True, height=320)
-
-    st.markdown("---")
-
-    if st.button("🚀 Activate Dispatch Agent", type="primary"):
-        with st.spinner("Agent analyzing volunteer pool and generating deployment plan..."):
-
-            # PII-safe data for AI
-            safe_df = local_pool[['Volunteer_ID', 'Skills', 'Has_Vehicle', 'Attendance_Rate', 'Preferred_Days', 'Neighborhood']].copy()
-
-            dispatch_prompt = f"""
-You are an NGO Regional Dispatch Agent. Build a complete deployment plan.
-
-EVENT: {event_name}
-DATE: {event_date}
-REGION: {selected_neighborhood}
-HARD TARGET: {target_count} volunteers
-SAFETY BUFFER TARGET: {buffer_target} (local avg attendance is {local_avg:.0%})
-REQUIRED SKILLS: {req_skills}
-VEHICLE REQUIRED: {req_vehicle}
-
-AVAILABLE VOLUNTEER POOL (no PII — IDs only):
-{safe_df.to_csv(index=False)}
-
-PRODUCE EXACTLY THESE SECTIONS:
-
-## 1. DEPLOYMENT MANIFEST
-Select exactly {buffer_target} Volunteer IDs (format: V-XXX). Prioritize: skill match > attendance rate > vehicle (if required). List selected IDs and brief rationale.
-
-## 2. ROLE ASSIGNMENT
-Group selected IDs by their function at the event (e.g., Medics, Drivers, Support Staff, Registration). Each person gets one role.
-
-## 3. WHATSAPP BROADCAST MESSAGE
-One professional, warm WhatsApp message to send to the full selected group. Include: event name, date, their role, what to bring, and a clear call-to-action. Max 180 words.
-
-## 4. RISK FLAGS
-If pool is insufficient or skills are missing, flag clearly and suggest a mitigation (e.g., pull from adjacent region, recruit external).
-
-Format with clear headers. IDs must be in V-XXX format.
-"""
-            ai_text = call_ai(dispatch_prompt, system="You are a precise NGO Operations Dispatch Agent. Be structured, operational, and concise.")
-
-        st.markdown(f'<div class="ai-output">{ai_text}</div>', unsafe_allow_html=True)
-
-        st.markdown('<div class="section-label">Actionable Contact List — PII Revealed (Client-Side Only)</div>', unsafe_allow_html=True)
-        found_ids = list(set(re.findall(r'V-\d{3}', ai_text)))
-        if found_ids:
-            contacts = df[df['Volunteer_ID'].isin(found_ids)][
-                ['Volunteer_ID', 'Full_Name', 'Phone_Number', 'Email', 'Skills', 'Has_Vehicle', 'Neighborhood']
-            ].copy()
-            st.data_editor(contacts, use_container_width=True, hide_index=True)
-            st.markdown(f'<div class="alert-box">✅ {len(contacts)} contacts identified. Phone & Email were never sent to the AI — revealed here only.</div>', unsafe_allow_html=True)
+            warn(f"⚠ {formula}. Pool insufficient — cross-region pull needed.")
         else:
-            st.info("No V-XXX IDs found in AI output. Ensure your CSV uses the V-XXX format.")
+            info(f"✓ {formula}. Pool sufficient.")
 
-# ════════════════════════════════════════════════════════════════════════════
-# PAGE ③ — UNIT LOGISTICS & SHIFTS
-# ════════════════════════════════════════════════════════════════════════════
-elif page == "🏗️  Unit Logistics & Shifts":
-    st.markdown("""
-    <div class="page-header">
-        <h2>🏗️ Unit Logistics & Shift Architect</h2>
-        <p>Squad structuring · 1:10 intern-to-volunteer ratio · Shift-block scheduling · Field playbooks</p>
-    </div>
-    """, unsafe_allow_html=True)
+    with c_right:
+        section("VOLUNTEER DISTRIBUTION MAP")
+        map_rows = []
+        for nbhd in neighborhoods:
+            sub   = volunteers_df[volunteers_df['Neighborhood'] == nbhd]
+            coord = NBHD_COORDS.get(nbhd)
+            if coord:
+                is_sel = sel_nbhd == nbhd or sel_nbhd == "All Regions"
+                map_rows.append({
+                    'Neighborhood': nbhd, 'lat': coord[0], 'lon': coord[1],
+                    'Count': len(sub),
+                    'Avg Att': f"{sub['Att'].mean():.0%}" if len(sub) > 0 else 'N/A',
+                    'Status': 'Active' if is_sel else 'Inactive',
+                })
+        mdf = pd.DataFrame(map_rows)
+        if len(mdf) > 0:
+            fig_map = px.scatter_mapbox(
+                mdf, lat='lat', lon='lon', size='Count', color='Status',
+                hover_name='Neighborhood',
+                hover_data={'lat':False,'lon':False,'Count':True,'Avg Att':True,'Status':False},
+                color_discrete_map={'Active':'#e0e0e0','Inactive':'#222'},
+                size_max=38, zoom=10,
+                center=dict(lat=28.635, lon=77.135),
+                mapbox_style='carto-darkmatter',
+            )
+            fig_map.update_layout(
+                paper_bgcolor='#050505', font=dict(family='Space Mono', color='#888', size=10),
+                margin=dict(l=0, r=0, t=0, b=0),
+                legend=dict(bgcolor='#050505', bordercolor='#1c1c1c', borderwidth=1,
+                            font=dict(size=9, color='#555'), title_text=''),
+                height=300,
+            )
+            st.plotly_chart(fig_map, use_container_width=True)
 
-    left, right = st.columns([1, 2])
-
-    with left:
-        st.markdown('<div class="section-label">Event Configuration</div>', unsafe_allow_html=True)
-        event_name     = st.text_input("Event Name", "Annual Food Drive 2025")
-        event_duration = st.selectbox("Event Duration", ["4 hours", "6 hours", "8 hours", "Full Day (10+ hours)"])
-        shift_size     = st.selectbox("Shift Block Size", ["2 hours", "4 hours", "6 hours"])
-        nbhd_filter    = st.selectbox("Region Filter", ["All Regions"] + neighborhoods)
-        max_slots      = st.number_input("Total Volunteer Slots", min_value=5, value=30, step=5)
-        roles_needed   = st.multiselect(
-            "Roles Required at Event",
-            ["General Labor", "Drivers", "Medics", "Food Handlers", "Coordinators", "Registration Desk", "Security", "Media/Documentation"],
-            default=["General Labor", "Drivers", "Coordinators"]
+        section(f"LOCAL ROSTER — {sel_nbhd.upper()}")
+        st.dataframe(
+            local_pool[['Volunteer_ID','Full_Name','Skills','Has_Vehicle','Attendance_Rate','Preferred_Days']],
+            use_container_width=True, hide_index=True, height=200
         )
 
-    with right:
-        st.markdown('<div class="section-label">Workforce Preview</div>', unsafe_allow_html=True)
+    st.markdown('<div class="hr"></div>', unsafe_allow_html=True)
 
-        if nbhd_filter == "All Regions":
-            filtered = df.copy()
-        else:
-            filtered = df[df['Neighborhood'] == nbhd_filter].copy()
+    if st.button("Run Dispatch Agent", type="primary"):
+        with st.spinner("Analyzing pool · building deployment plan..."):
+            safe = local_pool[['Volunteer_ID','Skills','Has_Vehicle','Attendance_Rate','Preferred_Days','Neighborhood']].copy()
+            ai_out = call_ai(f"""
+EVENT: {event_name} | DATE: {event_date} | REGION: {sel_nbhd}
+HARD TARGET: {target_count} | BUFFER TARGET: {buffer_target} (local avg {local_avg:.0%})
+REQUIRED SKILLS: {req_skills} | VEHICLE: {req_vehicle}
 
-        n_im  = len(filtered[filtered['Role'] == 'Intern-Manager'])
-        n_vol = len(filtered[filtered['Role'] == 'Volunteer'])
-        squads_possible = max(n_vol // 10, 1)
+POOL (no PII):
+{safe.to_csv(index=False)}
 
-        p1, p2, p3 = st.columns(3)
-        p1.metric("Interns Available",    n_im)
-        p2.metric("Volunteers Available", n_vol)
-        p3.metric("Squads Possible",      squads_possible, help="1 Intern-Manager per 10 Volunteers")
+OUTPUT — use these exact section headers:
 
-        preview = filtered[['Volunteer_ID', 'Full_Name', 'Role', 'Skills', 'Preferred_Days', 'Attendance_Rate']].copy()
-        st.dataframe(preview, use_container_width=True, hide_index=True, height=280)
+## DEPLOYMENT MANIFEST
+List exactly {buffer_target} Volunteer IDs (V-XXX). Brief rationale (2 sentences).
 
-    st.markdown("---")
+## ROLE ASSIGNMENT
+Markdown table: Volunteer_ID | Role | Reason
 
-    if st.button("⚙️ Generate Unit Structure & Shift Schedule", type="primary"):
-        with st.spinner("Architecting squads, assigning leads, scheduling shifts..."):
+## WHATSAPP BROADCAST
+Ready-to-send. Max 160 words. Include: event, date, role, report time, what to bring.
 
-            pool_top = filtered.nlargest(int(max_slots), 'Attendance_Float')
-            safe_pool = pool_top[['Volunteer_ID', 'Role', 'Skills', 'Preferred_Days', 'Attendance_Float']].copy()
+## RISK FLAGS
+Gaps, insufficient pool warnings, cross-region pull recommendations.
+""", "You are an NGO Dispatch Agent. Be precise, structured, and operational.")
 
-            logistics_prompt = f"""
-You are an NGO Logistics Architect. Structure this workforce for a large-scale event.
+        st.markdown(f'<div class="ai-block">{ai_out}</div>', unsafe_allow_html=True)
 
-EVENT: {event_name}
-DURATION: {event_duration} | SHIFT BLOCK: {shift_size}
-ROLES REQUIRED: {', '.join(roles_needed)}
-RULE: Assign exactly 1 Intern-Manager as Squad Lead for every 10 Volunteers.
+        section("CONTACT LIST — PII UNLOCKED (client-side only)")
+        found = list(set(re.findall(r'V-\d{3}', ai_out)))
+        if found:
+            contacts = df[df['Volunteer_ID'].isin(found)][
+                ['Volunteer_ID','Full_Name','Phone_Number','Email','Skills','Has_Vehicle','Neighborhood']
+            ].copy()
+            st.data_editor(contacts, use_container_width=True, hide_index=True)
+            info(f"✓ {len(contacts)} contacts. Phone/Email withheld from AI — displayed here only.")
 
-WORKFORCE POOL:
+# ════════════════════════════════════════════════════════════════════════════
+#  03 · UNIT LOGISTICS
+# ════════════════════════════════════════════════════════════════════════════
+elif page == "Unit Logistics":
+    st.markdown('<div class="mono-title">Unit Logistics & Shift Architect</div>', unsafe_allow_html=True)
+    st.markdown('<div class="mono-sub">Squad structuring · 1:10 intern ratio · Shift scheduling · Field playbooks</div>', unsafe_allow_html=True)
+
+    c_left, c_right = st.columns([1, 2], gap="large")
+
+    with c_left:
+        section("EVENT CONFIGURATION")
+        event_name   = st.text_input("Event Name",   "Annual Food Drive")
+        event_dur    = st.selectbox("Duration",       ["4 hours","6 hours","8 hours","Full Day"])
+        shift_size   = st.selectbox("Shift Blocks",   ["2 hours","4 hours","6 hours"])
+        nbhd_filter  = st.selectbox("Region Filter",  ["All Regions"] + neighborhoods)
+        max_slots    = st.number_input("Volunteer Slots", min_value=5, value=30, step=5)
+        roles_needed = st.multiselect("Event Roles", [
+            "General Labor","Drivers","Medics","Food Handlers",
+            "Coordinators","Registration","Security","Media",
+        ], default=["General Labor","Drivers","Coordinators"])
+
+    with c_right:
+        section("WORKFORCE PREVIEW")
+        filtered = df.copy() if nbhd_filter == "All Regions" else df[df['Neighborhood'] == nbhd_filter].copy()
+        n_im  = len(filtered[filtered['Role']=='INTERN-MGR'])
+        n_vol = len(filtered[filtered['Role']=='VOLUNTEER'])
+        n_sq  = max(n_vol//10, 1)
+
+        p1, p2, p3, p4 = st.columns(4)
+        p1.metric("Interns",    n_im)
+        p2.metric("Volunteers", n_vol)
+        p3.metric("Squads",     n_sq,  help="1 IM per 10 Volunteers")
+        p4.metric("IM Ratio",   f"1:{n_vol//max(n_im,1)}")
+
+        st.dataframe(
+            filtered[['Volunteer_ID','Full_Name','Role','Skills','Preferred_Days','Attendance_Rate']],
+            use_container_width=True, hide_index=True, height=240
+        )
+
+        section("SQUAD CAPACITY BREAKDOWN")
+        sq_names = [f"Squad {chr(65+i)}" for i in range(min(n_sq, 8))]
+        fig_sq = go.Figure()
+        fig_sq.add_bar(name='Volunteers', x=sq_names, y=[10]*len(sq_names), marker_color='#2a2a2a',
+                       marker_line_color='#444', marker_line_width=1)
+        fig_sq.add_bar(name='IM Lead',    x=sq_names, y=[1]*len(sq_names),  marker_color='#e0e0e0',
+                       marker_line_color='#444', marker_line_width=1)
+        fig_sq.update_layout(barmode='stack', title='SQUAD STRUCTURE (1 IM : 10 VOL)',
+                             **PBASE, height=200)
+        st.plotly_chart(fig_sq, use_container_width=True)
+
+    st.markdown('<div class="hr"></div>', unsafe_allow_html=True)
+
+    if st.button("Generate Unit Structure & Shift Schedule", type="primary"):
+        with st.spinner("Architecting squads · scheduling shifts..."):
+            pool_top  = filtered.nlargest(int(max_slots), 'Att')
+            safe_pool = pool_top[['Volunteer_ID','Role','Skills','Preferred_Days','Att']].copy()
+            ai_out = call_ai(f"""
+EVENT: {event_name} | DURATION: {event_dur} | SHIFT BLOCKS: {shift_size}
+ROLES: {', '.join(roles_needed)}
+RULE: 1 INTERN-MGR lead per 10 VOLUNTEER members.
+
+POOL:
 {safe_pool.to_csv(index=False)}
 
-PRODUCE EXACTLY THESE SECTIONS:
+OUTPUT — use these exact section headers:
 
-## 1. SQUAD STRUCTURE
-Organize into named squads (Squad Alpha, Squad Bravo, etc.)
-For each squad: Squad Name | Lead (Intern-Manager ID) | Member IDs | Assigned Role
-Present as a markdown table.
+## SQUAD STRUCTURE
+Table: Squad Name | Lead ID | Member IDs | Role
 
-## 2. SHIFT SCHEDULE
-Break {event_duration} into {shift_size} blocks.
-Assign squads to shifts. Present as a clear table:
-Shift Block | Time | Squad(s) Assigned | Role
+## SHIFT SCHEDULE
+Table: Block | Time | Squad | Role | Notes
 
-## 3. FIELD PLAYBOOK
-Write 3-4 bullet point instructions for each role: {', '.join(roles_needed)}
-Tone: direct, operational. No fluff.
+## FIELD PLAYBOOK
+For each role ({', '.join(roles_needed)}): 3-4 bullets. Direct operational language.
 
-## 4. DEPLOYMENT SUMMARY
-Total units formed | Total people deployed | Shifts covered | Intern-Manager coverage ratio
-"""
-            ai_text = call_ai(logistics_prompt, system="You are a precise NGO Logistics Architect. Produce structured, operational field-ready plans.")
+## DEPLOYMENT SUMMARY
+One paragraph: squads formed, people deployed, shifts covered, IM coverage.
+""", "You are an NGO Logistics Architect. Be structured and field-ready.")
 
-        st.markdown(f'<div class="ai-output">{ai_text}</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="ai-block">{ai_out}</div>', unsafe_allow_html=True)
 
-        st.markdown('<div class="section-label">Final Roster with Contacts</div>', unsafe_allow_html=True)
-        found_ids = list(set(re.findall(r'V-\d{3}', ai_text)))
-        if found_ids:
-            roster = df[df['Volunteer_ID'].isin(found_ids)][
-                ['Volunteer_ID', 'Full_Name', 'Role', 'Phone_Number', 'Skills', 'Neighborhood']
+        section("ROSTER WITH CONTACTS")
+        found = list(set(re.findall(r'V-\d{3}', ai_out)))
+        if found:
+            roster = df[df['Volunteer_ID'].isin(found)][
+                ['Volunteer_ID','Full_Name','Role','Phone_Number','Skills','Neighborhood']
             ].copy()
             st.data_editor(roster, use_container_width=True, hide_index=True)
 
 # ════════════════════════════════════════════════════════════════════════════
-# PAGE ④ — GROWTH & GAP AUDITOR
+#  04 · GROWTH AUDITOR
 # ════════════════════════════════════════════════════════════════════════════
-elif page == "📈  Growth & Gap Auditor":
-    st.markdown("""
-    <div class="page-header">
-        <h2>📈 Growth & Gap Auditor</h2>
-        <p>Regional skill gaps · Churn prediction · Promotion pipeline · Recruitment campaigns</p>
-    </div>
-    """, unsafe_allow_html=True)
+elif page == "Growth Auditor":
+    st.markdown('<div class="mono-title">Growth & Gap Auditor</div>', unsafe_allow_html=True)
+    st.markdown('<div class="mono-sub">Regional gaps · Churn prediction · Promotion pipeline</div>', unsafe_allow_html=True)
 
-    audit_tab1, audit_tab2, audit_tab3 = st.tabs([
-        "🗺️ Regional Gap Analysis",
-        "⚠️ Churn Predictor",
-        "🏆 Promotion Pipeline"
-    ])
+    t1, t2, t3 = st.tabs(["  REGIONAL GAPS  ", "  CHURN PREDICTOR  ", "  PROMOTION PIPELINE  "])
 
-    # ── TAB A: REGIONAL GAP ANALYSIS ──
-    with audit_tab1:
-        global_skills = list(set(parse_skills(df['Skills'])))
-
+    with t1:
+        section("SKILL GAP MATRIX")
+        g_skills = list(set(parse_skills(df['Skills'])))
         gap_rows = []
-        for region in neighborhoods:
-            rdf = df[df['Neighborhood'] == region]
-            r_skills = list(set(parse_skills(rdf['Skills'])))
-            missing  = [s for s in global_skills if s not in r_skills]
-            gap_rows.append({
-                'Region':         region,
-                'Headcount':      len(rdf),
-                'Skills Present': len(r_skills),
-                'Skills Missing': len(missing),
-                'Critical Gaps':  ', '.join(missing[:6]) + ('…' if len(missing) > 6 else '')
-            })
+        for reg in neighborhoods:
+            rdf     = df[df['Neighborhood'] == reg]
+            r_sk    = list(set(parse_skills(rdf['Skills'])))
+            missing = [s for s in g_skills if s not in r_sk]
+            gap_rows.append({'Region':reg,'Headcount':len(rdf),
+                             'Skills OK':len(r_sk),'Gaps':len(missing),
+                             'Missing': ', '.join(missing[:5])+('…' if len(missing)>5 else '')})
+        gap_df = pd.DataFrame(gap_rows).sort_values('Gaps', ascending=False)
 
-        gap_df = pd.DataFrame(gap_rows).sort_values('Skills Missing', ascending=False)
-        st.dataframe(gap_df, use_container_width=True, hide_index=True)
+        g1, g2 = st.columns([2, 3])
+        with g1:
+            fig_g = go.Figure(go.Bar(
+                x=gap_df['Gaps'], y=gap_df['Region'], orientation='h',
+                marker_color='#e0e0e0',
+                text=gap_df['Gaps'], textposition='outside', textfont=dict(size=9,color='#555'),
+            ))
+            fig_g.update_layout(title='GAPS BY REGION', **PBASE, height=320)
+            st.plotly_chart(fig_g, use_container_width=True)
+        with g2:
+            st.dataframe(gap_df, use_container_width=True, hide_index=True, height=340)
 
-        st.markdown("---")
-        sel_region = st.selectbox("Generate Recruitment Campaign for:", neighborhoods)
+        section("GENERATE RECRUITMENT CAMPAIGN")
+        sel_reg = st.selectbox("Target Region", neighborhoods, key="gap_reg")
+        if st.button("Generate Recruitment Ad", type="primary", key="gap_btn"):
+            row = gap_df[gap_df['Region']==sel_reg].iloc[0]
+            with st.spinner("Building campaign..."):
+                ai_out = call_ai(f"""
+Region: {sel_reg} | Headcount: {row['Headcount']} | Missing Skills: {row['Missing']}
 
-        if st.button("🎯 Generate Targeted Recruitment Ad", type="primary", key="gap_btn"):
-            row = gap_df[gap_df['Region'] == sel_region].iloc[0]
-            with st.spinner("AI crafting targeted recruitment campaign..."):
-                ad_prompt = f"""
-Region: {sel_region} | Headcount: {row['Headcount']} | Missing Skills: {row['Critical Gaps']}
+## WHATSAPP POST
+Community-focused, energetic. Skills needed: {row['Missing']}. 120 words max. Include CTA.
 
-Generate:
+## SOCIAL CAPTION
+Professional. 80 words max. Hashtags at end.
 
-## 1. WHATSAPP RECRUITMENT POST
-Casual, energetic, community-focused. Target people with these skills: {row['Critical Gaps']}. Max 120 words. Include a clear call-to-action.
+## OUTREACH CHANNELS
+3 specific, actionable channels to reach people with these skills in {sel_reg}.
+""", "You are an NGO talent acquisition specialist.")
+            st.markdown(f'<div class="ai-block">{ai_out}</div>', unsafe_allow_html=True)
 
-## 2. SOCIAL MEDIA CAPTION (LinkedIn / Instagram)
-Professional tone. Max 100 words. Hashtags at the end.
+    with t2:
+        section("AT-RISK VOLUNTEER DETECTOR")
+        thresh = st.slider("At-Risk Threshold (%)", 30, 70, 50, 5)
+        churn  = df[df['Att'] < thresh/100].sort_values('Att')
 
-## 3. OUTREACH STRATEGY
-3 specific, actionable channels to reach people with these skills in {sel_region} (e.g., local colleges, clinics, RWA notice boards).
-"""
-                ad_response = call_ai(ad_prompt, system="You are an NGO talent acquisition specialist. Write compelling, hyper-targeted recruitment content.")
-            st.markdown(f'<div class="ai-output">{ad_response}</div>', unsafe_allow_html=True)
+        cc1, cc2 = st.columns([1, 3])
+        with cc1:
+            st.markdown(f"""
+            <div class="stat-block"><span class="val">{len(churn)}</span>
+            <span class="lbl">At-Risk</span><span class="sub">{len(churn)/len(df):.0%} of workforce</span></div>
+            """, unsafe_allow_html=True)
+            
+            fig_c = go.Figure(go.Histogram(x=churn['Att'], nbinsx=8, marker_color='#2a2a2a'))
+            fig_c.update_layout(title='AT-RISK ATT. DIST.', **PBASE, height=200, margin=dict(l=0,r=0,t=28,b=0))
+            fig_c.update_xaxes(tickformat='.0%')
+            st.plotly_chart(fig_c, use_container_width=True)
 
-    # ── TAB B: CHURN PREDICTOR ──
-    with audit_tab2:
-        churn_thresh = st.slider("At-Risk Attendance Threshold (%)", 30, 70, 50, 5,
-                                 help="Volunteers below this rate are flagged as at-risk.")
-        churn = df[df['Attendance_Float'] < (churn_thresh / 100)].sort_values('Attendance_Float')
-        churn_display = churn[['Volunteer_ID', 'Full_Name', 'Neighborhood', 'Role', 'Attendance_Rate', 'Skills']].copy()
+            churn_by_region = churn.groupby('Neighborhood').size().reset_index(name='Count')
+            fig_cr = go.Figure(go.Bar(x=churn_by_region['Count'], y=churn_by_region['Neighborhood'], orientation='h', marker_color='#333'))
+            fig_cr.update_layout(title='BY REGION', **PBASE, height=200, margin=dict(l=0,r=0,t=28,b=0))
+            st.plotly_chart(fig_cr, use_container_width=True)
 
-        c1, c2 = st.columns([1, 3])
-        c1.metric("At-Risk Volunteers", len(churn), delta=f"of {len(df)} total", delta_color="inverse")
-        c1.metric("% of Workforce",  f"{len(churn)/len(df):.0%}", delta_color="inverse")
+        with cc2:
+            st.dataframe(
+                churn[['Volunteer_ID','Full_Name','Neighborhood','Role','Attendance_Rate','Skills']],
+                use_container_width=True, hide_index=True, height=420
+            )
 
-        with c2:
-            st.dataframe(churn_display, use_container_width=True, hide_index=True, height=200)
+        if len(churn) > 0:
+            if st.button("Generate Re-activation Campaign", type="primary", key="churn_btn"):
+                with st.spinner("Building re-engagement strategy..."):
+                    safe_c = churn[['Volunteer_ID','Neighborhood','Skills','Attendance_Rate']].head(20)
+                    ai_out = call_ai(f"""
+{len(churn)} at-risk volunteers (attendance < {thresh}%).
 
-        if st.button("📣 Generate Re-activation Campaign", type="primary", key="churn_btn") and len(churn) > 0:
-            with st.spinner("Building re-engagement strategy..."):
-                churn_safe = churn[['Volunteer_ID', 'Neighborhood', 'Skills', 'Attendance_Rate']].head(20)
-                reactivation_prompt = f"""
-We have {len(churn)} at-risk volunteers (attendance below {churn_thresh}%).
+Sample profiles:
+{safe_c.to_csv(index=False)}
 
-Sample at-risk profiles:
-{churn_safe.to_csv(index=False)}
+## RE-ENGAGEMENT MESSAGE
+Warm, non-judgmental WhatsApp. Acknowledge absence, celebrate past work, invite return. 150 words max.
 
-Produce:
+## RE-ACTIVATION STRATEGY
+3 tactical approaches (micro-events, personal outreach, recognition programs).
+""", "You are an NGO community engagement manager.")
+                st.markdown(f'<div class="ai-block">{ai_out}</div>', unsafe_allow_html=True)
 
-## 1. RE-ENGAGEMENT MESSAGE
-Warm, non-judgmental WhatsApp message to send the group. Acknowledge the gap, celebrate past contributions, invite them back. Max 150 words.
+    with t3:
+        section("PROMOTION PIPELINE")
+        p_thresh   = st.slider("Promotion Threshold (%)", 70, 95, 82, 1)
+        candidates = df[(df['Att'] >= p_thresh/100) & (df['Role']=='VOLUNTEER')].sort_values('Att', ascending=False)
 
-## 2. RE-ACTIVATION STRATEGY
-3 tactical approaches to bring these volunteers back (e.g., personal check-in calls, low-commitment micro-events, recognition programs).
+        pp1, pp2 = st.columns([1, 2])
+        with pp1:
+            st.markdown(f"""
+            <div class="stat-block"><span class="val">{len(candidates)}</span>
+            <span class="lbl">Candidates</span><span class="sub">Att ≥ {p_thresh}%</span></div>
+            <div class="stat-block" style="margin-top:1px;"><span class="val">1:{len(volunteers_df)//max(len(interns_df),1)}</span>
+            <span class="lbl">Current IM Ratio</span><span class="sub">Target: 1:10</span></div>
+            """, unsafe_allow_html=True)
 
-## 3. INCENTIVE STRUCTURE
-Concrete incentives to boost attendance: recognition tiers, certificates, role upgrades, etc.
+            top10 = candidates.head(10)
+            fig_p = go.Figure(go.Bar(
+                x=top10['Volunteer_ID'], y=top10['Att'],
+                marker_color='#e0e0e0',
+                text=[f"{v:.0%}" for v in top10['Att']],
+                textposition='outside', textfont=dict(size=8,color='#555'),
+            ))
+            fig_p.update_layout(title='TOP CANDIDATE SCORES', **PBASE, height=220)
+            fig_p.update_yaxes(tickformat='.0%')
+            fig_p.update_xaxes(tickangle=-40)
+            st.plotly_chart(fig_p, use_container_width=True)
 
-## 4. 2-WEEK ACTION PLAN
-Day-by-day or step-by-step re-activation playbook for the NGO coordinator.
+        with pp2:
+            st.dataframe(
+                candidates[['Volunteer_ID','Full_Name','Neighborhood','Attendance_Rate','Skills']],
+                use_container_width=True, hide_index=True, height=380
+            )
 
-Tone: warm, community-first, not corporate.
-"""
-                reactivation_response = call_ai(reactivation_prompt, system="You are an NGO community engagement manager. Write in a warm, human, action-oriented style.")
-            st.markdown(f'<div class="ai-output">{reactivation_response}</div>', unsafe_allow_html=True)
+        if len(candidates) > 0:
+            if st.button("Generate Promotion Briefing", type="primary", key="promo_btn"):
+                with st.spinner("Building promotion assessment..."):
+                    safe_p = candidates[['Volunteer_ID','Neighborhood','Skills','Attendance_Rate']].head(10)
+                    ai_out = call_ai(f"""
+Candidates (att ≥ {p_thresh}%):
+{safe_p.to_csv(index=False)}
 
-    # ── TAB C: PROMOTION PIPELINE ──
-    with audit_tab3:
-        promo_thresh = st.slider("Promotion Threshold (%)", 70, 95, 82, 1,
-                                 help="Volunteers at or above this attendance rate are flagged for promotion.")
+Current: {len(interns_df)} IMs, {len(volunteers_df)} Volunteers. Target ratio: 1:10.
 
-        candidates = df[
-            (df['Attendance_Float'] >= promo_thresh / 100) &
-            (df['Role'] == 'Volunteer')
-        ].sort_values('Attendance_Float', ascending=False)
+## TOP 3 CANDIDATES
+ID, reason for selection, what they bring to leadership.
 
-        current_ratio = f"1 : {len(volunteers_df) // max(len(interns_df), 1)}"
-        ideal_ratio   = "1 : 10"
+## INTERN-MANAGER ROLE DEFINITION
+Responsibilities, authority, what they own in the field.
 
-        p1, p2, p3 = st.columns(3)
-        p1.metric("Promotion Candidates", len(candidates))
-        p2.metric("Current IM Ratio",     current_ratio, help="Intern-Managers to Volunteers")
-        p3.metric("Ideal Ratio",          ideal_ratio)
+## ONBOARDING CHECKLIST
+7 concrete steps within 2 weeks.
 
-        promo_display = candidates[['Volunteer_ID', 'Full_Name', 'Neighborhood', 'Attendance_Rate', 'Skills']].copy()
-        st.dataframe(promo_display, use_container_width=True, hide_index=True, height=220)
-
-        if st.button("📋 Generate Promotion Briefing", type="primary", key="promo_btn") and len(candidates) > 0:
-            with st.spinner("Building promotion assessment and onboarding plan..."):
-                promo_safe = candidates[['Volunteer_ID', 'Neighborhood', 'Skills', 'Attendance_Rate']].head(10)
-                promo_prompt = f"""
-These volunteers have exceptional commitment (attendance ≥ {promo_thresh}%) and are candidates for Intern-Manager promotion.
-
-Candidates:
-{promo_safe.to_csv(index=False)}
-
-Current State: {len(interns_df)} Intern-Managers, {len(volunteers_df)} Volunteers (ratio {current_ratio}, target 1:10)
-
-Produce:
-
-## 1. TOP 3 CANDIDATES
-Recommend the 3 best candidates with specific reasoning for each.
-
-## 2. INTERN-MANAGER ROLE DEFINITION
-What this role means in the field: responsibilities, expectations, authority, and what they own.
-
-## 3. ONBOARDING CHECKLIST
-6-8 concrete steps to onboard a new Intern-Manager within 2 weeks.
-
-## 4. CONGRATULATORY MESSAGE TEMPLATE
-A message to send to each selected candidate. Warm, proud, specific.
-
-Be concrete and operational.
-"""
-                promo_response = call_ai(promo_prompt, system="You are an NGO HR strategist. Be specific, structured, and inspiring.")
-            st.markdown(f'<div class="ai-output">{promo_response}</div>', unsafe_allow_html=True)
+## CONGRATULATORY MESSAGE TEMPLATE
+Warm message to send each selected candidate.
+""", "You are an NGO HR strategist.")
+                st.markdown(f'<div class="ai-block">{ai_out}</div>', unsafe_allow_html=True)
 
 # ════════════════════════════════════════════════════════════════════════════
-# PAGE ⑤ — DATABASE COPILOT
+#  05 · DATABASE COPILOT
 # ════════════════════════════════════════════════════════════════════════════
-elif page == "🧠  Database Copilot":
-    st.markdown("""
-    <div class="page-header">
-        <h2>🧠 Database Copilot</h2>
-        <p>Your AI Ops Director — ask strategic workforce questions, generate impact reports</p>
-    </div>
-    """, unsafe_allow_html=True)
+elif page == "Database Copilot":
+    st.markdown('<div class="mono-title">Database Copilot</div>', unsafe_allow_html=True)
+    st.markdown('<div class="mono-sub">AI Ops Director · Strategic workforce intelligence · No PII exposure</div>', unsafe_allow_html=True)
 
-    # Build rich context (no PII)
-    region_context = (
-        df.groupby('Neighborhood')
-        .agg(
-            Headcount=('Volunteer_ID', 'count'),
-            Avg_Att=('Attendance_Float', 'mean'),
-            IMs=('Role', lambda x: (x == 'Intern-Manager').sum()),
-            Vols=('Role', lambda x: (x == 'Volunteer').sum())
-        )
-        .reset_index()
-        .to_csv(index=False)
-    )
+    region_ctx = df.groupby('Neighborhood').agg(
+        Headcount=('Volunteer_ID','count'),
+        IMs=('Role', lambda x: (x=='INTERN-MGR').sum()),
+        Vols=('Role', lambda x: (x=='VOLUNTEER').sum()),
+        Avg_Att=('Att','mean'),
+    ).reset_index().to_csv(index=False)
 
     top_skills = pd.Series(parse_skills(df['Skills'])).value_counts().head(20).to_string()
 
-    COPILOT_SYSTEM = f"""You are the NGO Operations Director Copilot — a strategic AI advisor with full visibility into the volunteer database.
+    SYSTEM = f"""You are the NGO Operations Director AI — a strategic advisor.
 
-WORKFORCE SNAPSHOT:
-- Total People: {len(df)} ({len(interns_df)} Intern-Managers, {len(volunteers_df)} Volunteers)
-- Average Attendance: {avg_attendance:.0%}
-- Regions Active: {len(neighborhoods)} ({', '.join(neighborhoods)})
-- At-Risk (<50% att.): {len(df[df['Attendance_Float'] < 0.50])}
-- Promotion Candidates (>82% att., Volunteer tier): {len(df[(df['Attendance_Float'] >= 0.82) & (df['Role'] == 'Volunteer')])}
+SNAPSHOT:
+- Total: {len(df)} ({len(interns_df)} Intern-Managers, {len(volunteers_df)} Volunteers)
+- Avg Attendance: {avg_att:.0%} | Regions: {len(neighborhoods)} | At-Risk (<50%): {len(df[df['Att']<0.50])}
+- Promotion Candidates (>82%, Volunteer): {len(df[(df['Att']>=0.82)&(df['Role']=='VOLUNTEER')])}
 
-REGIONAL BREAKDOWN:
-{region_context}
+REGIONAL DATA:
+{region_ctx}
 
-TOP 20 SKILLS IN DATABASE:
+TOP SKILLS:
 {top_skills}
 
-You answer STRATEGIC questions about: workforce density, regional coverage, simultaneous event capacity, skill gaps, deployment limits, ratio analysis, and operational readiness. Be precise, cite numbers from the data above, and give actionable recommendations. Never reveal individual PII in your responses."""
+Answer STRATEGIC questions about workforce density, coverage, event capacity, skill gaps, deployment limits, ratio analysis. Cite real numbers. Never reveal individual PII."""
 
-    if "copilot_msgs" not in st.session_state:
-        st.session_state.copilot_msgs = []
+    if "cop_msgs" not in st.session_state:
+        st.session_state.cop_msgs = []
 
-    # Quick-fire suggested queries
-    st.markdown('<div class="section-label">Quick Intelligence Queries</div>', unsafe_allow_html=True)
-    suggestions = [
-        ("🔍", "Which region has the weakest coverage?"),
-        ("🚗", "How many drivers do we have per region?"),
-        ("⚡", "Can we run 3 simultaneous events right now?"),
-        ("📉", "Which skills are critically understaffed?"),
+    section("QUICK QUERIES")
+    qcols = st.columns(4)
+    quick_queries = [
+        "Which region has weakest coverage?",
+        "Can we run 3 simultaneous events?",
+        "Which skills are critically understaffed?",
+        "What is our max deployment capacity?",
     ]
-    cols = st.columns(len(suggestions))
-    for col, (icon, q) in zip(cols, suggestions):
-        if col.button(f"{icon} {q}", key=f"sugg_{q[:10]}"):
-            st.session_state.copilot_msgs.append({"role": "user", "content": q})
-            with st.spinner("Ops Director analyzing..."):
-                messages = [{"role": "system", "content": COPILOT_SYSTEM}] + st.session_state.copilot_msgs
-                res = client.chat.completions.create(model=MODEL, messages=messages, max_tokens=1024)
-                ai_reply = res.choices[0].message.content
-                st.session_state.copilot_msgs.append({"role": "assistant", "content": ai_reply})
+    for qcol, q in zip(qcols, quick_queries):
+        if qcol.button(q, key=f"q_{q[:10]}"):
+            st.session_state.cop_msgs.append({"role":"user","content":q})
+            r = client.chat.completions.create(
+                model=MODEL,
+                messages=[{"role":"system","content":SYSTEM}] + st.session_state.cop_msgs,
+                max_tokens=1024
+            )
+            ai = r.choices[0].message.content
+            st.session_state.cop_msgs.append({"role":"assistant","content":ai})
             st.rerun()
 
-    st.markdown("---")
+    st.markdown('<div class="hr"></div>', unsafe_allow_html=True)
 
-    # Chat history
-    for msg in st.session_state.copilot_msgs:
+    for msg in st.session_state.cop_msgs:
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
 
-    if prompt := st.chat_input("Ask your Ops Director anything about the workforce..."):
-        st.session_state.copilot_msgs.append({"role": "user", "content": prompt})
+    if prompt := st.chat_input("Ask your Ops Director..."):
+        st.session_state.cop_msgs.append({"role":"user","content":prompt})
         with st.chat_message("user"):
             st.markdown(prompt)
-
         with st.chat_message("assistant"):
-            messages = [{"role": "system", "content": COPILOT_SYSTEM}] + st.session_state.copilot_msgs
-            res = client.chat.completions.create(model=MODEL, messages=messages, max_tokens=1024)
-            ai_reply = res.choices[0].message.content
-            st.markdown(ai_reply)
-            st.session_state.copilot_msgs.append({"role": "assistant", "content": ai_reply})
+            msgs = [{"role":"system","content":SYSTEM}] + st.session_state.cop_msgs
+            r    = client.chat.completions.create(model=MODEL, messages=msgs, max_tokens=1024)
+            ai   = r.choices[0].message.content
+            st.markdown(ai)
+            st.session_state.cop_msgs.append({"role":"assistant","content":ai})
 
-    st.markdown("---")
-    btn_left, btn_right = st.columns([1, 1])
+    st.markdown('<div class="hr"></div>', unsafe_allow_html=True)
+    d1, d2, d3 = st.columns([1,1,2])
 
-    if btn_left.button("🗑️ Clear Chat", key="clear_copilot"):
-        st.session_state.copilot_msgs = []
+    if d1.button("Clear Chat", key="clear_cop"):
+        st.session_state.cop_msgs = []
         st.rerun()
 
-    if btn_right.button("📄 Generate Donor Impact Report", type="primary", key="impact_report"):
-        with st.spinner("Generating donor-ready impact report..."):
-            report_prompt = f"""
-Generate a polished, donor-ready NGO Workforce Impact Report.
+    if d2.button("Generate Donor Impact Report", type="primary", key="donor_rpt"):
+        with st.spinner("Compiling report..."):
+            ai_out = call_ai(f"""
+Write a professional donor-ready NGO Workforce Impact Report.
 
 DATA:
-- Total Workforce: {len(df)} people across {len(neighborhoods)} neighborhoods
-- Intern-Managers (Leadership): {len(interns_df)}
-- Field Volunteers: {len(volunteers_df)}
-- Average Attendance Rate: {avg_attendance:.0%}
-- At-Risk Volunteers: {len(df[df['Attendance_Float'] < 0.50])} (flagged for re-engagement)
+- Workforce: {len(df)} across {len(neighborhoods)} neighborhoods
+- Intern-Managers: {len(interns_df)} | Volunteers: {len(volunteers_df)}
+- Avg Attendance: {avg_att:.0%}
+- At-Risk: {len(df[df['Att']<0.5])} flagged for re-engagement
 - Top Skills: {', '.join(pd.Series(parse_skills(df['Skills'])).value_counts().head(8).index.tolist())}
 
-REGIONAL BREAKDOWN:
-{region_context}
+REGIONAL:
+{region_ctx}
 
-Write a formal 1-page impact report with these sections:
-1. **Executive Summary** — 3 sentences. No bullet points. Inspiring and factual.
-2. **Workforce Strength** — Key statistics, formatted clearly.
-3. **Regional Reach** — Top 3 regions highlighted. What we can achieve there.
-4. **Operational Capacity** — What events we can run simultaneously, max deployment scenarios.
-5. **Growth Trajectory** — 1 forward-looking paragraph about expansion potential.
-
-Tone: professional, data-backed, inspiring to donors and stakeholders.
-"""
-            report = call_ai(report_prompt, system="You are a senior NGO communications strategist. Write polished, donor-appropriate impact reports.")
-
-        st.markdown("### 📄 Donor-Ready Impact Report")
-        st.markdown(f'<div class="ai-output">{report}</div>', unsafe_allow_html=True)
+Sections:
+1. EXECUTIVE SUMMARY — 3 sentences, no bullets. Inspiring and factual.
+2. WORKFORCE STRENGTH — Key numbers.
+3. REGIONAL REACH — Top 3 regions.
+4. OPERATIONAL CAPACITY — Events possible, max deployment.
+5. GROWTH TRAJECTORY — 1 forward-looking paragraph.
+""", "You are a senior NGO communications strategist.")
+        section("DONOR IMPACT REPORT")
+        st.markdown(f'<div class="ai-block">{ai_out}</div>', unsafe_allow_html=True)
