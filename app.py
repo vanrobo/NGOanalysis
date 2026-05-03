@@ -217,33 +217,43 @@ def call_ai(prompt, system="", max_tokens=2048):
     return client.chat.completions.create(model=MODEL, messages=msgs, max_tokens=max_tokens).choices[0].message.content
 
 # ─── DATA PROCESSING ─────────────────────────────────────────────────────────
+# ─── DATA PROCESSING ─────────────────────────────────────────────────────────
 @st.cache_data
 def process(raw):
     df = raw.copy()
     df['Full_Name'] = df['First_Name'].str.strip() + " " + df['Last_Name'].str.strip()
-    if df['Attendance_Rate'].dtype == object:
-        df['Att'] = df['Attendance_Rate'].astype(str).str.replace('%','',regex=False).str.strip().astype(float)
-        if df['Att'].max() > 1: df['Att'] /= 100
+
+    # --- FIX STARTS HERE ---
+    # This new block robustly handles any errors in the Attendance_Rate column.
+    if 'Attendance_Rate' in df.columns:
+        # 1. Convert the column to string, remove the '%' sign and any extra whitespace.
+        # 2. Use pd.to_numeric with errors='coerce'. This turns any value that can't be converted
+        #    (like an empty cell or text) into a blank value (NaN) instead of crashing.
+        # 3. Use .fillna(0.0) to replace any of those blank values with 0.
+        cleaned_att = pd.to_numeric(
+            df['Attendance_Rate'].astype(str).str.replace('%', '', regex=False).str.strip(),
+            errors='coerce'
+        ).fillna(0.0)
+
+        # 4. Normalize the data (e.g., convert 95 to 0.95)
+        if not cleaned_att.empty and cleaned_att.max() > 1:
+            df['Att'] = cleaned_att / 100
+        else:
+            df['Att'] = cleaned_att
     else:
-        df['Att'] = df['Attendance_Rate'].astype(float)
-        if df['Att'].max() > 1: df['Att'] /= 100
-        
+        # If the column doesn't exist at all, create a default to prevent errors later.
+        df['Att'] = 0.5
+    # --- FIX ENDS HERE ---
+
     if 'Role' not in df.columns:
         t = df['Att'].quantile(0.80)
         df['Role'] = df['Att'].apply(lambda x: 'INTERN-MGR' if x >= t else 'VOLUNTEER')
     else:
-        # Standardize Role names for consistency
         df['Role'] = df['Role'].replace({'Intern-Manager': 'INTERN-MGR', 'Volunteer': 'VOLUNTEER'})
-        
+
     if 'Neighborhood' not in df.columns:
         df['Neighborhood'] = [MOCK_AREAS[i % len(MOCK_AREAS)] for i in range(len(df))]
     return df
-
-def parse_skills(series):
-    out = []
-    for v in series.dropna():
-        out.extend([s.strip() for s in str(v).split(';') if s.strip()])
-    return out
 
 # ─── SIDEBAR ─────────────────────────────────────────────────────────────────
 with st.sidebar:
