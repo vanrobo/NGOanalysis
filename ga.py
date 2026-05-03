@@ -50,37 +50,41 @@ def call_ai(prompt, system="", max_tokens=2048):
 
 # ─── DATA PROCESSING ─────────────────────────────────────────────────────────
 @st.cache_data
-def process_data(raw_df):
-    df = raw_df.copy()
-    
-    # Normalize columns
-    df.columns =[c.strip() for c in df.columns]
+def process(raw):
+    df = raw.copy()
     
     # Handle missing names safely
     df['First_Name'] = df['First_Name'].fillna('')
     df['Last_Name'] = df['Last_Name'].fillna('')
     df['Full_Name'] = df['First_Name'].astype(str).str.strip() + " " + df['Last_Name'].astype(str).str.strip()
     
-    # Robust Attendance
-    if 'Attendance_Rate' in df.columns:
-        df['Att_Val'] = pd.to_numeric(
-            df['Attendance_Rate'].astype(str).str.replace('%', '', regex=False), errors='coerce'
-        ).fillna(0)
-        df['Att_Float'] = df['Att_Val'] / 100.0 if df['Att_Val'].max() > 1.0 else df['Att_Val']
+    # FIX: Robustly parse Attendance_Rate to avoid the string cast ValueError
+    # Force to string, remove %, strip whitespaces, then safely convert to numeric
+    att_series = df['Attendance_Rate'].astype(str).str.replace('%', '', regex=False).str.strip()
+    df['Att'] = pd.to_numeric(att_series, errors='coerce').fillna(0.0)
+    
+    # Scale back to 0-1 if it was 0-100
+    if df['Att'].max() > 1: 
+        df['Att'] /= 100
+        
+    if 'Role' not in df.columns:
+        t = df['Att'].quantile(0.80)
+        df['Role'] = df['Att'].apply(lambda x: 'Manager' if x >= t else 'Volunteer')
     else:
-        df['Att_Float'] = 0.0
-
-    # FLATTEN HIERARCHY: Everyone is simply a Volunteer
-    df['Role'] = 'Volunteer'
+        # Standardize Role names for consistency and cleaner UI
+        df['Role'] = df['Role'].replace({
+            'Intern': 'Intern', 
+            'INTERN': 'Intern', 
+            'Volunteer': 'Volunteer',
+            'VOLUNTEER': 'Volunteer'
+        })
         
     if 'Neighborhood' not in df.columns:
-        areas =['Paschim Vihar', 'Rohini', 'Dwarka', 'Janakpuri', 'Pitampura', 'Saket']
-        df['Neighborhood'] = [areas[i % len(areas)] for i in range(len(df))]
-        
+        df['Neighborhood'] = [MOCK_AREAS[i % len(MOCK_AREAS)] for i in range(len(df))]
     return df
 
 def parse_skills(series):
-    out =[]
+    out = []
     for v in series.dropna():
         out.extend([s.strip() for s in str(v).split(';') if s.strip()])
     return out
@@ -92,7 +96,7 @@ with st.sidebar:
     page = st.radio("Navigation",[
         "Overview Dashboard",
         "Event Deployment",
-        "Unit Logistics",
+        "Team Logistics",
         "Volunteer Analytics",
         "AI Assistant",
     ])
@@ -108,7 +112,7 @@ with st.sidebar:
         Volunteer_ID, First_Name, Last_Name, Phone_Number, Email, Skills, Interests, Has_Vehicle, Attendance_Rate, Preferred_Days
         
         **Optional:**
-        Neighborhood
+        Role, Neighborhood
         """)
 
 # ─── LANDING PAGE ────────────────────────────────────────────────────────────
@@ -121,8 +125,8 @@ if not uploaded_file:
     features =[
         ("Overview Dashboard", "High-level metrics, regional density, and skill inventory."),
         ("Event Deployment", "Plan local events and deploy the right volunteers based on data."),
-        ("Unit Logistics", "Build squads and generate shift schedules."),
-        ("Volunteer Analytics", "Identify skill gaps, track retention, and recognize top performers."),
+        ("Team Logistics", "Build teams, assign managers, and generate shift schedules."),
+        ("Volunteer Analytics", "Identify skill gaps, track retention, and find leadership candidates."),
         ("AI Assistant", "Chat with your data to extract strategic insights quickly.")
     ]
     
@@ -134,12 +138,14 @@ if not uploaded_file:
 
 # ─── LOAD DATA ───────────────────────────────────────────────────────────────
 try:
-    df = process_data(pd.read_csv(uploaded_file))
+    df = process(pd.read_csv(uploaded_file))
 except Exception as e:
     st.error(f"Error processing the CSV file: {e}")
     st.stop()
 
-avg_att = df['Att_Float'].mean()
+managers_df = df[df['Role'] == 'Manager']
+volunteers_df = df[df['Role'] == 'Volunteer']
+avg_att = df['Att'].mean()
 neighborhoods = sorted(df['Neighborhood'].unique().tolist())
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -151,11 +157,12 @@ if page == "Overview Dashboard":
     st.divider()
 
     # KPI row
-    k1, k2, k3, k4 = st.columns(4)
+    k1, k2, k3, k4, k5 = st.columns(5)
     k1.metric("Total Workforce", len(df))
-    k2.metric("Avg Attendance", f"{avg_att:.0%}")
-    k3.metric("Regions Active", len(neighborhoods))
-    k4.metric("At Risk (<50% Att)", len(df[df['Att_Float'] < 0.5]))
+    k2.metric("Managers", len(managers_df))
+    k3.metric("Avg Attendance", f"{avg_att:.0%}")
+    k4.metric("Regions Active", len(neighborhoods))
+    k5.metric("At Risk (<50% Att)", len(df[df['Att'] < 0.5]))
 
     st.divider()
 
@@ -163,20 +170,20 @@ if page == "Overview Dashboard":
 
     with c1:
         st.subheader("Volunteer Density by Region")
-        region_data = df.groupby('Neighborhood').size().reset_index(name='Count')
-        fig = go.Figure(go.Bar(
-            name='Volunteers', 
-            x=region_data['Neighborhood'], 
-            y=region_data['Count'], 
-            marker_color='#58a6ff'
-        ))
-        fig.update_layout(margin=dict(t=30, b=0, l=0, r=0))
+        region_data = df.groupby(['Neighborhood','Role']).size().reset_index(name='Count')
+        pivot = region_data.pivot(index='Neighborhood', columns='Role', values='Count').fillna(0).reset_index()
+        fig = go.Figure()
+        if 'Manager' in pivot.columns:
+            fig.add_bar(name='Managers', x=pivot['Neighborhood'], y=pivot['Manager'])
+        if 'Volunteer' in pivot.columns:
+            fig.add_bar(name='Volunteers',  x=pivot['Neighborhood'], y=pivot['Volunteer'])
+        fig.update_layout(barmode='stack', margin=dict(t=30, b=0, l=0, r=0))
         st.plotly_chart(fig, use_container_width=True)
 
     with c2:
         st.subheader("Top Skills Inventory")
         sk = pd.Series(parse_skills(df['Skills'])).value_counts().head(15).reset_index()
-        sk.columns =['Skill', 'Count']
+        sk.columns = ['Skill', 'Count']
         st.dataframe(sk, use_container_width=True, hide_index=True)
 
     st.divider()
@@ -184,13 +191,12 @@ if page == "Overview Dashboard":
 
     with c3:
         st.subheader("Attendance Distribution")
-        bins  = pd.cut(df['Att_Float'], bins=[0,.4,.6,.8,1.01], labels=['<40%','40-60%','60-80%','>80%'])
+        bins  = pd.cut(df['Att'], bins=[0,.4,.6,.8,1.01], labels=['<40%','40-60%','60-80%','>80%'])
         bdata = bins.value_counts().sort_index().reset_index()
-        bdata.columns =['Band','Count']
+        bdata.columns = ['Band','Count']
         fig2 = go.Figure(go.Bar(
             x=bdata['Band'], y=bdata['Count'],
-            text=bdata['Count'], textposition='auto',
-            marker_color='#47c283'
+            text=bdata['Count'], textposition='auto'
         ))
         fig2.update_layout(margin=dict(t=30, b=0, l=0, r=0))
         st.plotly_chart(fig2, use_container_width=True)
@@ -199,8 +205,10 @@ if page == "Overview Dashboard":
         st.subheader("Regional Readiness")
         readiness = df.groupby('Neighborhood').agg(
             Headcount=('Volunteer_ID','count'),
-            Avg_Att=('Att_Float', lambda x: f"{x.mean():.0%}"),
-            At_Risk=('Att_Float', lambda x: (x<.5).sum()),
+            Managers=('Role', lambda x: (x=='Manager').sum()),
+            Volunteers=('Role', lambda x: (x=='Volunteer').sum()),
+            Avg_Att=('Att', lambda x: f"{x.mean():.0%}"),
+            At_Risk=('Att', lambda x: (x<.5).sum()),
         ).reset_index()
         st.dataframe(readiness, use_container_width=True, hide_index=True)
 
@@ -215,16 +223,15 @@ elif page == "Event Deployment":
 
     with c_left:
         st.subheader("Event Parameters")
-        sel_nbhd     = st.selectbox("Target Neighborhood",["All Regions"] + neighborhoods)
+        sel_nbhd     = st.selectbox("Target Neighborhood", ["All Regions"] + neighborhoods)
         event_name   = st.text_input("Event Name",   "Medical Camp")
         event_date   = st.text_input("Date & Time",  "Saturday, 10 AM – 4 PM")
         target_count = st.number_input("Volunteers Needed", min_value=1, value=10, step=1)
         req_skills   = st.text_input("Required Skills", "First Aid, CPR")
         req_vehicle  = st.checkbox("Vehicle Required")
 
-        # Now pulls from df instead of limited volunteers_df
-        local_pool    = df if sel_nbhd == "All Regions" else df[df['Neighborhood'] == sel_nbhd].copy()
-        local_avg     = local_pool['Att_Float'].mean() if len(local_pool) > 0 else 0.60
+        local_pool    = volunteers_df if sel_nbhd == "All Regions" else volunteers_df[volunteers_df['Neighborhood'] == sel_nbhd].copy()
+        local_avg     = local_pool['Att'].mean() if len(local_pool) > 0 else 0.60
         buffer_target = int(target_count / local_avg) + 1 if local_avg > 0 else target_count * 2
 
         st.subheader("Capacity Check")
@@ -240,16 +247,16 @@ elif page == "Event Deployment":
 
     with c_right:
         st.subheader("Volunteer Map")
-        map_rows =[]
+        map_rows = []
         for nbhd in neighborhoods:
-            sub   = df[df['Neighborhood'] == nbhd] # Using entire df fixes the low count issue
+            sub   = volunteers_df[volunteers_df['Neighborhood'] == nbhd]
             coord = NBHD_COORDS.get(nbhd)
             if coord:
                 is_sel = sel_nbhd == nbhd or sel_nbhd == "All Regions"
                 map_rows.append({
                     'Neighborhood': nbhd, 'lat': coord[0], 'lon': coord[1],
                     'Count': len(sub),
-                    'Avg Att': f"{sub['Att_Float'].mean():.0%}" if len(sub) > 0 else 'N/A',
+                    'Avg Att': f"{sub['Att'].mean():.0%}" if len(sub) > 0 else 'N/A',
                     'Status': 'Target Area' if is_sel else 'Outside',
                 })
         mdf = pd.DataFrame(map_rows)
@@ -290,10 +297,10 @@ OUTPUT — use these exact section headers:
 List exactly {buffer_target} Volunteer IDs. Brief rationale (2 sentences).
 
 ## ROLE ASSIGNMENT
-Markdown table: Volunteer_ID | Event Task | Reason
+Markdown table: Volunteer_ID | Role | Reason
 
 ## COMMUNICATION DRAFT
-Ready-to-send broadcast message for volunteers. Max 150 words. Include: event, date, task, report time, what to bring.
+Ready-to-send broadcast message for volunteers. Max 150 words. Include: event, date, role, report time, what to bring.
 
 ## RISK FLAGS
 Gaps, insufficient pool warnings, cross-region pull recommendations.
@@ -310,20 +317,20 @@ Gaps, insufficient pool warnings, cross-region pull recommendations.
             st.dataframe(contacts, use_container_width=True, hide_index=True)
 
 # ════════════════════════════════════════════════════════════════════════════
-#  03 · UNIT LOGISTICS
+#  03 · TEAM LOGISTICS
 # ════════════════════════════════════════════════════════════════════════════
-elif page == "Unit Logistics":
-    st.title("Unit Logistics")
-    st.write("Organize volunteers into squads, set shift schedules, and generate role playbooks.")
+elif page == "Team Logistics":
+    st.title("Team Logistics")
+    st.write("Organize volunteers into teams, set shift schedules, and generate role playbooks.")
 
     c_left, c_right = st.columns([1, 2], gap="large")
 
     with c_left:
         st.subheader("Event Configuration")
         event_name   = st.text_input("Event Name",   "Annual Food Drive")
-        event_dur    = st.selectbox("Duration",["4 hours","6 hours","8 hours","Full Day"])
-        shift_size   = st.selectbox("Shift Blocks",["2 hours","4 hours","6 hours"])
-        nbhd_filter  = st.selectbox("Region Filter",["All Regions"] + neighborhoods)
+        event_dur    = st.selectbox("Duration",       ["4 hours","6 hours","8 hours","Full Day"])
+        shift_size   = st.selectbox("Shift Blocks",   ["2 hours","4 hours","6 hours"])
+        nbhd_filter  = st.selectbox("Region Filter",  ["All Regions"] + neighborhoods)
         max_slots    = st.number_input("Volunteer Slots", min_value=5, value=30, step=5)
         roles_needed = st.multiselect("Event Roles",[
             "General Labor","Drivers","Medics","Food Handlers",
@@ -333,69 +340,66 @@ elif page == "Unit Logistics":
     with c_right:
         st.subheader("Workforce Preview")
         filtered = df.copy() if nbhd_filter == "All Regions" else df[df['Neighborhood'] == nbhd_filter].copy()
-        
-        n_vol = len(filtered)
-        n_squads = max(n_vol // 10, 1)
+        n_mgr = len(filtered[filtered['Role']=='Manager'])
+        n_vol = len(filtered[filtered['Role']=='Volunteer'])
+        n_teams = max(n_vol//10, 1)
 
-        p1, p2, p3 = st.columns(3)
-        p1.metric("Available Volunteers", n_vol)
-        p2.metric("Estimated Squads", n_squads)
-        p3.metric("Est. Squad Size", f"{max(n_vol // n_squads, 1)}")
+        p1, p2, p3, p4 = st.columns(4)
+        p1.metric("Available Managers",    n_mgr)
+        p2.metric("Available Volunteers", n_vol)
+        p3.metric("Estimated Teams",     n_teams)
+        p4.metric("Manager Ratio",   f"1 : {n_vol//max(n_mgr,1)}")
 
         st.dataframe(
-            filtered[['Volunteer_ID','Full_Name','Skills','Preferred_Days','Attendance_Rate']],
+            filtered[['Volunteer_ID','Full_Name','Role','Skills','Preferred_Days','Attendance_Rate']],
             use_container_width=True, hide_index=True, height=240
         )
 
-        st.subheader("Standard Squad Structure")
-        sq_names =[f"Squad {chr(65+i)}" for i in range(min(n_squads, 8))]
+        st.subheader("Standard Team Capacity")
+        team_names =[f"Team {chr(65+i)}" for i in range(min(n_teams, 8))]
         fig_sq = go.Figure()
-        fig_sq.add_bar(name='Volunteers', x=sq_names, y=[10]*len(sq_names), marker_color='#58a6ff')
-        fig_sq.update_layout(
-            barmode='stack', 
-            title='10 VOLUNTEERS PER SQUAD', 
-            margin=dict(t=30, b=0, l=0, r=0), 
-            height=250
-        )
+        fig_sq.add_bar(name='Volunteers', x=team_names, y=[10]*len(team_names))
+        fig_sq.add_bar(name='Manager',    x=team_names, y=[1]*len(team_names))
+        fig_sq.update_layout(barmode='stack', margin=dict(t=30, b=0, l=0, r=0), height=250)
         st.plotly_chart(fig_sq, use_container_width=True)
 
     st.divider()
 
-    if st.button("Generate Squad Schedule", type="primary"):
-        with st.spinner("Structuring squads and shifts..."):
-            pool_top  = filtered.nlargest(int(max_slots), 'Att_Float')
-            safe_pool = pool_top[['Volunteer_ID','Skills','Preferred_Days','Att_Float']].copy()
+    if st.button("Generate Team Schedule", type="primary"):
+        with st.spinner("Structuring teams and shifts..."):
+            pool_top  = filtered.nlargest(int(max_slots), 'Att')
+            safe_pool = pool_top[['Volunteer_ID','Role','Skills','Preferred_Days','Att']].copy()
             ai_out = call_ai(f"""
 EVENT: {event_name} | DURATION: {event_dur} | SHIFT BLOCKS: {shift_size}
 ROLES: {', '.join(roles_needed)}
-RULE: Organize into groups of roughly 10 Volunteers each.
+RULE: Ensure roughly 1 Manager lead per 10 Volunteer members.
 
 POOL:
 {safe_pool.to_csv(index=False)}
 
 OUTPUT — use these exact section headers:
 
-## SQUAD STRUCTURE
-Table: Squad Name | Member IDs | Role focus
+## TEAM STRUCTURE
+Table: Team Name | Manager ID | Member IDs | Role focus
 
 ## SHIFT SCHEDULE
-Table: Block | Time | Squad | Task | Notes
+Table: Block | Time | Team | Role | Notes
 
 ## ROLE PLAYBOOK
 For each role ({', '.join(roles_needed)}): 2-3 concise bullets detailing responsibilities.
 
 ## SUMMARY
 A brief summary paragraph of the plan.
-""", "You are a professional NGO coordinator specializing in squad logistics.")
+""", "You are a professional NGO coordinator specializing in team logistics.")
 
-        st.info("Squad Schedule Generated")
+        st.info("Team Schedule Generated")
         st.markdown(ai_out)
 
         st.subheader("Selected Personnel Roster")
         found = list(set(re.findall(r'V-\d{3}', ai_out)))
         if found:
             roster = df[df['Volunteer_ID'].isin(found)][
-                ['Volunteer_ID','Full_Name','Phone_Number','Skills','Neighborhood']
+                ['Volunteer_ID','Full_Name','Role','Phone_Number','Skills','Neighborhood']
             ].copy()
             st.dataframe(roster, use_container_width=True, hide_index=True)
 
@@ -404,9 +408,9 @@ A brief summary paragraph of the plan.
 # ════════════════════════════════════════════════════════════════════════════
 elif page == "Volunteer Analytics":
     st.title("Volunteer Analytics")
-    st.write("Analyze regional skill gaps, identify retention risks, and recognize top contributors.")
+    st.write("Analyze regional skill gaps, identify retention risks, and surface candidates for management roles.")
 
-    t1, t2, t3 = st.tabs(["Skill Gaps", "At-Risk Volunteers", "Top Performers"])
+    t1, t2, t3 = st.tabs(["Skill Gaps", "At-Risk Volunteers", "Promotion Pipeline"])
 
     with t1:
         st.subheader("Skill Gap Matrix")
@@ -425,8 +429,7 @@ elif page == "Volunteer Analytics":
         with g1:
             fig_g = go.Figure(go.Bar(
                 x=gap_df['Skill Gaps'], y=gap_df['Region'], orientation='h',
-                text=gap_df['Skill Gaps'], textposition='auto',
-                marker_color='#f5b041'
+                text=gap_df['Skill Gaps'], textposition='auto'
             ))
             fig_g.update_layout(margin=dict(t=10, b=0, l=0, r=0), height=320)
             st.plotly_chart(fig_g, use_container_width=True)
@@ -456,7 +459,7 @@ Engaging and professional. 100 words max. Include a call to action.
     with t2:
         st.subheader("Retention & Re-engagement")
         thresh = st.slider("At-Risk Threshold (Attendance %)", 30, 70, 50, 5)
-        churn  = df[df['Att_Float'] < thresh/100].sort_values('Att_Float')
+        churn  = df[df['Att'] < thresh/100].sort_values('Att')
 
         cc1, cc2 = st.columns([1, 3])
         with cc1:
@@ -464,18 +467,13 @@ Engaging and professional. 100 words max. Include a call to action.
             st.write(f"**{len(churn)/len(df):.0%}** of total workforce")
             
             churn_by_region = churn.groupby('Neighborhood').size().reset_index(name='Count')
-            fig_cr = go.Figure(go.Bar(
-                x=churn_by_region['Count'], 
-                y=churn_by_region['Neighborhood'], 
-                orientation='h',
-                marker_color='#e74c3c'
-            ))
+            fig_cr = go.Figure(go.Bar(x=churn_by_region['Count'], y=churn_by_region['Neighborhood'], orientation='h'))
             fig_cr.update_layout(title='By Region', margin=dict(t=30, b=0, l=0, r=0), height=250)
             st.plotly_chart(fig_cr, use_container_width=True)
 
         with cc2:
             st.dataframe(
-                churn[['Volunteer_ID','Full_Name','Neighborhood','Attendance_Rate','Skills']],
+                churn[['Volunteer_ID','Full_Name','Neighborhood','Role','Attendance_Rate','Skills']],
                 use_container_width=True, hide_index=True, height=420
             )
 
@@ -499,21 +497,21 @@ Provide 3 practical ideas to improve attendance among this group based on standa
                 st.markdown(ai_out)
 
     with t3:
-        st.subheader("Top Performers Recognition")
-        p_thresh   = st.slider("High Performer Threshold (%)", 70, 95, 85, 1)
-        candidates = df[df['Att_Float'] >= p_thresh/100].sort_values('Att_Float', ascending=False)
+        st.subheader("Manager Promotion Pipeline")
+        p_thresh   = st.slider("Promotion Qualification Threshold (%)", 70, 95, 82, 1)
+        candidates = df[(df['Att'] >= p_thresh/100) & (df['Role']=='Volunteer')].sort_values('Att', ascending=False)
 
         pp1, pp2 = st.columns([1, 2])
         with pp1:
-            st.metric("Qualified Top Performers", len(candidates))
-            
+            st.metric("Qualified Candidates", len(candidates))
+            st.metric("Current Manager Ratio", f"1 : {len(volunteers_df)//max(len(managers_df),1)}")
+
             top10 = candidates.head(10)
             fig_p = go.Figure(go.Bar(
-                x=top10['Volunteer_ID'], y=top10['Att_Float'],
-                text=[f"{v:.0%}" for v in top10['Att_Float']], textposition='auto',
-                marker_color='#2ecc71'
+                x=top10['Volunteer_ID'], y=top10['Att'],
+                text=[f"{v:.0%}" for v in top10['Att']], textposition='auto'
             ))
-            fig_p.update_layout(title='Highest Attendance Scores', margin=dict(t=30, b=0, l=0, r=0), height=220)
+            fig_p.update_layout(title='Top Candidates Scores', margin=dict(t=30, b=0, l=0, r=0), height=220)
             fig_p.update_yaxes(tickformat='.0%')
             st.plotly_chart(fig_p, use_container_width=True)
 
@@ -524,19 +522,19 @@ Provide 3 practical ideas to improve attendance among this group based on standa
             )
 
         if len(candidates) > 0:
-            if st.button("Draft Recognition Briefing", type="primary", key="promo_btn"):
+            if st.button("Draft Promotion Briefing", type="primary", key="promo_btn"):
                 with st.spinner("Drafting briefing..."):
                     safe_p = candidates[['Volunteer_ID','Neighborhood','Skills','Attendance_Rate']].head(10)
                     ai_out = call_ai(f"""
 Top performing volunteers (attendance ≥ {p_thresh}%):
 {safe_p.to_csv(index=False)}
 
-## RECOGNITION RECOMMENDATIONS
-Highlight the top 3 IDs and how their specific skills make them incredibly valuable to our events.
+## PROMOTION RECOMMENDATIONS
+Highlight the top 3 IDs and why they should be considered for a Manager role.
 
-## THANK YOU MESSAGE
-Draft a warm, professional email thanking them for their outstanding attendance and continuous dedication.
-""", "You are a volunteer engagement coordinator for an NGO.")
+## WELCOME MESSAGE
+Draft a professional email offering a candidate a step up into a leadership/manager role.
+""", "You are an HR manager for an NGO.")
                 st.info("Briefing Generated")
                 st.markdown(ai_out)
 
@@ -549,7 +547,9 @@ elif page == "AI Assistant":
 
     region_ctx = df.groupby('Neighborhood').agg(
         Headcount=('Volunteer_ID','count'),
-        Avg_Att=('Att_Float','mean'),
+        Managers=('Role', lambda x: (x=='Manager').sum()),
+        Vols=('Role', lambda x: (x=='Volunteer').sum()),
+        Avg_Att=('Att','mean'),
     ).reset_index().to_csv(index=False)
 
     top_skills = pd.Series(parse_skills(df['Skills'])).value_counts().head(20).to_string()
@@ -557,9 +557,9 @@ elif page == "AI Assistant":
     SYSTEM = f"""You are a helpful and professional NGO operations assistant.
 
 DATA SNAPSHOT:
-- Total Workforce: {len(df)} Volunteers
+- Total Workforce: {len(df)} ({len(managers_df)} Managers, {len(volunteers_df)} Volunteers)
 - Average Attendance: {avg_att:.0%} | Active Regions: {len(neighborhoods)}
-- At-Risk Volunteers (<50%): {len(df[df['Att_Float']<0.50])}
+- At-Risk Volunteers (<50%): {len(df[df['Att']<0.50])}
 
 REGIONAL DATA:
 {region_ctx}
@@ -603,7 +603,7 @@ Please answer questions based on this data. Be concise, polite, and helpful. Nev
         with st.chat_message("user"):
             st.markdown(prompt)
         with st.chat_message("assistant"):
-            msgs =[{"role":"system","content":SYSTEM}] + st.session_state.cop_msgs
+            msgs = [{"role":"system","content":SYSTEM}] + st.session_state.cop_msgs
             r    = client.chat.completions.create(model=MODEL, messages=msgs, max_tokens=1024)
             ai   = r.choices[0].message.content
             st.markdown(ai)
@@ -622,7 +622,8 @@ Please answer questions based on this data. Be concise, polite, and helpful. Nev
 Write a professional NGO Workforce Status Report.
 
 DATA:
-- Total Workforce: {len(df)} Volunteers across {len(neighborhoods)} neighborhoods
+- Workforce: {len(df)} across {len(neighborhoods)} neighborhoods
+- Managers: {len(managers_df)} | Volunteers: {len(volunteers_df)}
 - Avg Attendance: {avg_att:.0%}
 - Top Skills: {', '.join(pd.Series(parse_skills(df['Skills'])).value_counts().head(8).index.tolist())}
 
