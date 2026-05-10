@@ -495,44 +495,38 @@ elif page == "AI Assistant":
     st.title("AI Assistant")
     st.write("Chat with an AI assistant that understands your workforce data.")
 
-    # Granular Context for AI
-    region_ctx = df.groupby('Neighborhood').agg(
-        Count=('Volunteer_ID','count'),
-        Avg_Att=('Att_Float','mean')
-    ).reset_index().to_csv(index=False)
+    # GRANULAR CONTEXT: Provide enough data to avoid hallucinations
+    # 1. Regional Summary
+    region_ctx = df.groupby('Neighborhood').agg(Count=('Volunteer_ID','count'), Avg_Att=('Att_Float','mean')).reset_index().to_csv(index=False)
     
-    # Top 20 Performers (Granular data for individual queries)
-    top_performers = df.sort_values('Att_Float', ascending=False).head(20)[
-        ['Volunteer_ID', 'Full_Name', 'Type', 'Skills', 'Attendance_Rate', 'Neighborhood']
+    # 2. ALL Interns (Usually ~60-70 people, fits easily in context)
+    intern_list = df[df['Type'] == 'Intern'].sort_values('Att_Float', ascending=False)[
+        ['Volunteer_ID', 'Full_Name', 'Attendance_Rate', 'Neighborhood', 'Skills']
     ].to_csv(index=False)
 
-    # Specific Intern Summary
-    interns_only = df[df['Type'] == 'Intern']
-    high_att_interns = interns_only[interns_only['Att_Float'] >= 0.85].sort_values('Att_Float', ascending=False).head(10)[
-        ['Volunteer_ID', 'Full_Name', 'Attendance_Rate']
+    # 3. Top 30 Volunteers
+    top_vols = df[df['Type'] == 'Volunteer'].sort_values('Att_Float', ascending=False).head(30)[
+        ['Volunteer_ID', 'Full_Name', 'Attendance_Rate', 'Neighborhood', 'Skills']
     ].to_csv(index=False)
 
-    top_skills = pd.Series(parse_skills(df['Skills'])).value_counts().head(15).to_string()
-
-    SYSTEM = f"""You are an NGO Data Analyst. 
-OVERVIEW: {len(df)} total ({len(df[df['Type']=='Volunteer'])} Volunteers, {len(df[df['Type']=='Intern'])} Interns).
-REGIONAL AVERAGES:
+    SYSTEM = f"""You are a strict NGO Data Analyst. 
+CONTEXT:
+- Total Workforce: {len(df)}
+- Regional Overview:
 {region_ctx}
 
-TOP PERFORMERS (ALL):
-{top_performers}
+LIST OF ALL INTERNS:
+{intern_list}
 
-HIGH ATTENDANCE INTERNS:
-{high_att_interns}
+TOP 30 VOLUNTEERS:
+{top_vols}
 
-COMMON SKILLS:
-{top_skills}
-
-Instructions:
-1. Answer directly based on the data tables provided.
-2. If asked about specific names/IDs not in the Top 20, explain you only have access to the top performers and general statistics.
-3. Be professional and concise. Do not output code unless specifically requested.
-"""
+STRICT RULES:
+1. ONLY use names and IDs from the lists above.
+2. If a person is NOT in the lists, state you don't have their individual record.
+3. NEVER invent names, IDs, or statistics.
+4. If asked for "90%+" and someone is in the list with that score, list them.
+5. Accuracy is more important than speed."""
 
     if "cop_msgs" not in st.session_state:
         st.session_state.cop_msgs = []
@@ -546,7 +540,8 @@ Instructions:
         with st.chat_message("user"):
             st.markdown(prompt)
         with st.chat_message("assistant"):
-            ai_reply = call_ai(prompt, SYSTEM, model=MODEL_SMALL)
+            # Use MODEL_LARGE for data queries to ensure zero hallucinations
+            ai_reply = call_ai(prompt, SYSTEM, model=MODEL_LARGE)
             st.markdown(ai_reply)
             st.session_state.cop_msgs.append({"role": "assistant", "content": ai_reply})
 
