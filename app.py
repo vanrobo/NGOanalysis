@@ -495,19 +495,48 @@ elif page == "AI Assistant":
     st.title("AI Assistant")
     st.write("Chat with an AI assistant that understands your workforce data.")
 
+    # Granular Context for AI
     region_ctx = df.groupby('Neighborhood').agg(
-        Headcount=('Volunteer_ID','count'),
+        Count=('Volunteer_ID','count'),
         Avg_Att=('Att_Float','mean')
     ).reset_index().to_csv(index=False)
     
-    top_skills = pd.Series(parse_skills(df['Skills'])).value_counts().head(20).to_string()
+    # Top 20 Performers (Granular data for individual queries)
+    top_performers = df.sort_values('Att_Float', ascending=False).head(20)[
+        ['Volunteer_ID', 'Full_Name', 'Type', 'Skills', 'Attendance_Rate', 'Neighborhood']
+    ].to_csv(index=False)
 
-    SYSTEM = f"NGO Assistant. Workforce: {len(df)}. Avg Att: {avg_att:.0%}. Regions: {len(neighborhoods)}.\nDATA:\n{region_ctx}\nSKILLS:\n{top_skills}"
+    # Specific Intern Summary
+    interns_only = df[df['Type'] == 'Intern']
+    high_att_interns = interns_only[interns_only['Att_Float'] >= 0.85].sort_values('Att_Float', ascending=False).head(10)[
+        ['Volunteer_ID', 'Full_Name', 'Attendance_Rate']
+    ].to_csv(index=False)
+
+    top_skills = pd.Series(parse_skills(df['Skills'])).value_counts().head(15).to_string()
+
+    SYSTEM = f"""You are an NGO Data Analyst. 
+OVERVIEW: {len(df)} total ({len(df[df['Type']=='Volunteer'])} Volunteers, {len(df[df['Type']=='Intern'])} Interns).
+REGIONAL AVERAGES:
+{region_ctx}
+
+TOP PERFORMERS (ALL):
+{top_performers}
+
+HIGH ATTENDANCE INTERNS:
+{high_att_interns}
+
+COMMON SKILLS:
+{top_skills}
+
+Instructions:
+1. Answer directly based on the data tables provided.
+2. If asked about specific names/IDs not in the Top 20, explain you only have access to the top performers and general statistics.
+3. Be professional and concise. Do not output code unless specifically requested.
+"""
 
     if "cop_msgs" not in st.session_state:
         st.session_state.cop_msgs = []
 
-    # Display chat
     for msg in st.session_state.cop_msgs:
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
