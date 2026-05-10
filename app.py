@@ -1,4 +1,4 @@
-﻿import streamlit as st
+import streamlit as st
 import pandas as pd
 from groq import Groq
 import os, re
@@ -10,12 +10,12 @@ load_dotenv()
 
 st.set_page_config(
     page_title="NGO Volunteer Portal",
-    page_icon="ðŸ¤",
+    page_icon="🤝",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# â”€â”€â”€ NEIGHBORHOOD COORDS (Delhi) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ─── NEIGHBORHOOD COORDS (Delhi) ─────────────────────────────────────────────
 NBHD_COORDS = {
     'Paschim Vihar':   (28.6685, 77.0946),
     'Rohini':          (28.7045, 77.1100),
@@ -31,7 +31,7 @@ NBHD_COORDS = {
 MOCK_AREAS = list(NBHD_COORDS.keys())
 
 
-# â”€â”€â”€ API â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ─── API ──────────────────────────────────────────────────────────────────────
 api_key = os.getenv("GROQ_API_KEY") or st.secrets.get("GROQ_API_KEY", "")
 if not api_key:
     st.error("GROQ_API_KEY not configured. Please add it to your .env or secrets.")
@@ -49,7 +49,7 @@ def call_ai(prompt, system="", max_tokens=2048, model=MODEL_SMALL):
     return client.chat.completions.create(model=model, messages=msgs, max_tokens=max_tokens).choices[0].message.content
 
 
-# â”€â”€â”€ DATA PROCESSING â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ─── DATA PROCESSING ─────────────────────────────────────────────────────────
 @st.cache_data
 def process_data(raw_df):
     df = raw_df.copy()
@@ -91,13 +91,13 @@ def parse_skills(series):
     return out
 
 
-# â”€â”€â”€ SIDEBAR â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ─── SIDEBAR ──────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.title("NGO Portal")
     page = st.radio("Navigation",[
         "Overview Dashboard",
         "Event Deployment",
-        "Unit Logistics",
+        "Career Growth Hub",
         "Volunteer Analytics",
         "AI Assistant",
     ])
@@ -116,7 +116,7 @@ with st.sidebar:
         Neighborhood
         """)
 
-# â”€â”€â”€ LANDING PAGE â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ─── LANDING PAGE ────────────────────────────────────────────────────────────
 if not uploaded_file:
     st.title("Welcome to the NGO Volunteer Portal")
     st.write("Please upload your volunteer database via the sidebar to activate the management modules.")
@@ -126,7 +126,7 @@ if not uploaded_file:
     features =[
         ("Overview Dashboard", "High-level metrics, regional density, and skill inventory."),
         ("Event Deployment", "Plan local events and deploy the right volunteers based on data."),
-        ("Unit Logistics", "Build squads and generate shift schedules."),
+        ("Career Growth Hub", "Personalized career advising, skill roadmaps, and mock interviews."),
         ("Volunteer Analytics", "Identify skill gaps, track retention, and recognize top performers."),
         ("AI Assistant", "Chat with your data to extract strategic insights quickly.")
     ]
@@ -137,7 +137,7 @@ if not uploaded_file:
             st.write(desc)
     st.stop()
 
-# â”€â”€â”€ LOAD DATA â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+# ─── LOAD DATA ────────────────────────────────────────────────────────────────
 try:
     df = process_data(pd.read_csv(uploaded_file))
 except Exception as e:
@@ -147,9 +147,9 @@ except Exception as e:
 avg_att = df['Att_Float'].mean()
 neighborhoods = sorted(df['Neighborhood'].unique().tolist())
 
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-#  01 Â· OVERVIEW DASHBOARD
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# ════════════════════════════════════════════════════════════════════════════
+#  01 · OVERVIEW DASHBOARD
+# ════════════════════════════════════════════════════════════════════════════
 if page == "Overview Dashboard":
     st.title("Overview Dashboard")
     st.write(f"**Total Workforce:** {len(df)} personnel | **Regions Active:** {len(neighborhoods)}")
@@ -215,9 +215,9 @@ if page == "Overview Dashboard":
         ).reset_index()
         st.dataframe(readiness, use_container_width=True, hide_index=True)
 
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-#  02 Â· EVENT DEPLOYMENT
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# ════════════════════════════════════════════════════════════════════════════
+#  02 · EVENT DEPLOYMENT
+# ════════════════════════════════════════════════════════════════════════════
 elif page == "Event Deployment":
     st.title("Event Deployment Planning")
     st.write("Plan an event, set requirements, and generate a recommended deployment manifest.")
@@ -228,7 +228,7 @@ elif page == "Event Deployment":
         st.subheader("Event Parameters")
         sel_nbhd     = st.selectbox("Target Neighborhood",["All Regions"] + neighborhoods)
         event_name   = st.text_input("Event Name",   "Medical Camp")
-        event_date   = st.text_input("Date & Time",  "Saturday, 10 AM â€“ 4 PM")
+        event_date   = st.text_input("Date & Time",  "Saturday, 10 AM - 4 PM")
         target_count = st.number_input("Volunteers Needed", min_value=1, value=10, step=1)
         req_skills   = st.text_input("Required Skills", "First Aid, CPR")
         req_vehicle  = st.checkbox("Vehicle Required")
@@ -287,7 +287,7 @@ elif page == "Event Deployment":
             s2.metric("Interns", len(reg_sub[reg_sub['Type'] == 'Intern']))
             s3.metric("High Performers", len(reg_sub[reg_sub['Att_Float'] >= 0.8]))
 
-        st.subheader(f"Available Pool â€” {sel_nbhd}")
+        st.subheader(f"Available Pool - {sel_nbhd}")
         st.dataframe(
             local_pool[['Volunteer_ID','Full_Name','Type','Skills','Attendance_Rate','Preferred_Days']],
             use_container_width=True, hide_index=True, height=250
@@ -306,7 +306,7 @@ REQUIRED SKILLS: {req_skills} | VEHICLE: {req_vehicle}
 POOL (no PII):
 {safe.to_csv(index=False)}
 
-OUTPUT â€” use these exact section headers:
+OUTPUT - use these exact section headers:
 
 ## DEPLOYMENT MANIFEST
 List exactly {buffer_target} Volunteer IDs. prioritize Volunteers over Interns. Brief rationale (2 sentences).
@@ -331,20 +331,20 @@ Gaps, insufficient pool warnings, cross-region pull recommendations.
             ].copy()
             st.dataframe(contacts, use_container_width=True, hide_index=True)
 
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-#  03 Â· UNIT LOGISTICS (CAREER GROWTH HUB)
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-elif page == "Unit Logistics":
+# ════════════════════════════════════════════════════════════════════════════
+#  03 · CAREER GROWTH HUB
+# ════════════════════════════════════════════════════════════════════════════
+elif page == "Career Growth Hub":
     st.title("Volunteer Growth Hub")
     st.write("Empowering our workforce through AI-driven career coaching and skill development.")
 
-    ch1, ch2, ch3 = st.tabs(["ðŸŽ“ Career Advisor", "ðŸ›£ï¸ Skill Roadmap", "ðŸŽ¤ Mock Interviewer"])
+    ch1, ch2, ch3 = st.tabs(["🎓 Career Advisor", "🛣️ Skill Roadmap", "🎤 Mock Interviewer"])
 
     with ch1:
         st.subheader("Personalized Career Path Advisor")
         st.write("Get AI recommendations for your professional journey based on your volunteer experience.")
         career_volunteer = st.selectbox("Select Volunteer for Career Advice:", df['Full_Name'].unique(), key="career_select")
-        if career_volunteer and st.button("ðŸš€ Generate Career Paths", key="career_btn"):
+        if career_volunteer and st.button("🚀 Generate Career Paths", key="career_btn"):
             person = df[df['Full_Name'] == career_volunteer].iloc[0]
             with st.spinner("Analyzing career opportunities..."):
                 career_prompt = f"""
@@ -361,12 +361,12 @@ elif page == "Unit Logistics":
                 st.markdown(response)
 
     with ch2:
-        st.subheader("ðŸ›£ï¸ Personalized Skill Development Roadmap")
+        st.subheader("🛣️ Personalized Skill Development Roadmap")
         st.write("A 6-month AI-generated learning path tailored to your professional goals.")
         roadmap_volunteer = st.selectbox("Select Volunteer for Skill Roadmap:", df['Full_Name'].unique(), key="roadmap_select")
         goal = st.text_input("What is your ultimate professional goal?", value="Project Management in Social Sector")
         
-        if roadmap_volunteer and st.button("ðŸ“š Build My Learning Path", key="roadmap_btn"):
+        if roadmap_volunteer and st.button("📚 Build My Learning Path", key="roadmap_btn"):
             person = df[df['Full_Name'] == roadmap_volunteer].iloc[0]
             with st.spinner("Creating roadmap..."):
                 roadmap_prompt = f"""
@@ -380,7 +380,7 @@ elif page == "Unit Logistics":
                 st.markdown(response)
 
     with ch3:
-        st.subheader("ðŸŽ¤ AI Mock Interviewer")
+        st.subheader("🎤 AI Mock Interviewer")
         st.write("Practice for your next professional role with real-time AI feedback.")
         interview_volunteer = st.selectbox("Select Volunteer for Interview:", df['Full_Name'].unique(), key="interview_select")
         target_role = st.text_input("What role are you interviewing for?", value="Program Coordinator")
@@ -400,9 +400,9 @@ elif page == "Unit Logistics":
                     eval_res = call_ai(eval_prompt, "You are an NGO hiring manager.", model=MODEL_LARGE)
                     st.success(eval_res)
 
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-#  04 Â· VOLUNTEER ANALYTICS
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# ════════════════════════════════════════════════════════════════════════════
+#  04 · VOLUNTEER ANALYTICS
+# ════════════════════════════════════════════════════════════════════════════
 elif page == "Volunteer Analytics":
     st.title("Volunteer Analytics")
     st.write("Analyze regional skill gaps, identify retention risks, and recognize top contributors.")
@@ -421,7 +421,7 @@ elif page == "Volunteer Analytics":
                              'Volunteers': len(rdf[rdf['Type']=='Volunteer']),
                              'Interns': len(rdf[rdf['Type']=='Intern']),
                              'Skill Gaps':len(missing),
-                             'Missing Skills': ', '.join(missing[:5])+('â€¦' if len(missing)>5 else '')})
+                             'Missing Skills': ', '.join(missing[:5])+('...' if len(missing)>5 else '')})
         gap_df = pd.DataFrame(gap_rows).sort_values('Skill Gaps', ascending=False)
 
         g1, g2 = st.columns([2, 3])
@@ -484,13 +484,13 @@ elif page == "Volunteer Analytics":
         if len(candidates) > 0:
             if st.button("Draft Recognition Briefing", type="primary", key="promo_btn"):
                 with st.spinner("Drafting briefing..."):
-                    ai_out = call_ai(f"Top performing volunteers (attendance â‰¥ {p_thresh}%). Draft thank you email and recognition brief.", model=MODEL_LARGE)
+                    ai_out = call_ai(f"Top performing volunteers (attendance >= {p_thresh}%). Draft thank you email and recognition brief.", model=MODEL_LARGE)
                     st.info("Briefing Generated")
                     st.markdown(ai_out)
 
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
-#  05 Â· AI ASSISTANT
-# â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+# ════════════════════════════════════════════════════════════════════════════
+#  05 · AI ASSISTANT
+# ════════════════════════════════════════════════════════════════════════════
 elif page == "AI Assistant":
     st.title("AI Assistant")
     st.write("Chat with an AI assistant that understands your workforce data.")
