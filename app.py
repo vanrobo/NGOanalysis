@@ -38,14 +38,15 @@ if not api_key:
     st.stop()
 
 client = Groq(api_key=api_key)
-MODEL  = "llama-3.3-70b-versatile"
+MODEL_SMALL = "llama-3.1-8b-instant"
+MODEL_LARGE = "llama-3.3-70b-versatile"
 
-def call_ai(prompt, system="", max_tokens=2048):
+def call_ai(prompt, system="", max_tokens=2048, model=MODEL_SMALL):
     msgs =[]
     if system:
         msgs.append({"role": "system", "content": system})
     msgs.append({"role": "user", "content": prompt})
-    return client.chat.completions.create(model=MODEL, messages=msgs, max_tokens=max_tokens).choices[0].message.content
+    return client.chat.completions.create(model=model, messages=msgs, max_tokens=max_tokens).choices[0].message.content
 
 
 # ─── DATA PROCESSING ─────────────────────────────────────────────────────────
@@ -76,6 +77,10 @@ def process_data(raw_df):
     if 'Neighborhood' not in df.columns:
         areas =['Paschim Vihar', 'Rohini', 'Dwarka', 'Janakpuri', 'Pitampura', 'Saket']
         df['Neighborhood'] = [areas[i % len(areas)] for i in range(len(df))]
+
+    # Distinguish between Volunteers and Interns (20% Interns)
+    if 'Type' not in df.columns:
+        df['Type'] = ['Intern' if i % 5 == 0 else 'Volunteer' for i in range(len(df))]
         
     return df
 
@@ -151,25 +156,28 @@ if page == "Overview Dashboard":
     st.divider()
 
     # KPI row
-    k1, k2, k3, k4 = st.columns(4)
+    k1, k2, k3, k4, k5 = st.columns(5)
     k1.metric("Total Workforce", len(df))
-    k2.metric("Avg Attendance", f"{avg_att:.0%}")
-    k3.metric("Regions Active", len(neighborhoods))
-    k4.metric("At Risk (<50% Att)", len(df[df['Att_Float'] < 0.5]))
+    k2.metric("Volunteers", len(df[df['Type'] == 'Volunteer']))
+    k3.metric("Interns", len(df[df['Type'] == 'Intern']))
+    k4.metric("Avg Attendance", f"{avg_att:.0%}")
+    k5.metric("At Risk (<50% Att)", len(df[df['Att_Float'] < 0.5]))
 
     st.divider()
 
     c1, c2 = st.columns([3, 2])
 
     with c1:
-        st.subheader("Volunteer Density by Region")
-        region_data = df.groupby('Neighborhood').size().reset_index(name='Count')
-        fig = go.Figure(go.Bar(
-            name='Volunteers', 
-            x=region_data['Neighborhood'], 
-            y=region_data['Count'], 
-            marker_color='#58a6ff'
-        ))
+        st.subheader("Workforce Density by Region & Type")
+        region_type = df.groupby(['Neighborhood', 'Type']).size().reset_index(name='Count')
+        fig = px.bar(
+            region_type, 
+            x='Neighborhood', 
+            y='Count', 
+            color='Type',
+            barmode='group',
+            color_discrete_map={'Volunteer': '#58a6ff', 'Intern': '#f5b041'}
+        )
         fig.update_layout(margin=dict(t=30, b=0, l=0, r=0))
         st.plotly_chart(fig, use_container_width=True)
 
@@ -183,15 +191,17 @@ if page == "Overview Dashboard":
     c3, c4 = st.columns([2, 3])
 
     with c3:
-        st.subheader("Attendance Distribution")
-        bins  = pd.cut(df['Att_Float'], bins=[0,.4,.6,.8,1.01], labels=['<40%','40-60%','60-80%','>80%'])
-        bdata = bins.value_counts().sort_index().reset_index()
-        bdata.columns =['Band','Count']
-        fig2 = go.Figure(go.Bar(
-            x=bdata['Band'], y=bdata['Count'],
-            text=bdata['Count'], textposition='auto',
-            marker_color='#47c283'
-        ))
+        st.subheader("Attendance Distribution by Type")
+        df['Band'] = pd.cut(df['Att_Float'], bins=[0,.4,.6,.8,1.01], labels=['<40%','40-60%','60-80%','>80%'])
+        bdata = df.groupby(['Band', 'Type']).size().reset_index(name='Count')
+        fig2 = px.bar(
+            bdata, 
+            x='Band', 
+            y='Count', 
+            color='Type', 
+            barmode='group',
+            color_discrete_map={'Volunteer': '#47c283', 'Intern': '#e74c3c'}
+        )
         fig2.update_layout(margin=dict(t=30, b=0, l=0, r=0))
         st.plotly_chart(fig2, use_container_width=True)
 
@@ -199,8 +209,9 @@ if page == "Overview Dashboard":
         st.subheader("Regional Readiness")
         readiness = df.groupby('Neighborhood').agg(
             Headcount=('Volunteer_ID','count'),
+            Volunteers=('Type', lambda x: (x == 'Volunteer').sum()),
+            Interns=('Type', lambda x: (x == 'Intern').sum()),
             Avg_Att=('Att_Float', lambda x: f"{x.mean():.0%}"),
-            At_Risk=('Att_Float', lambda x: (x<.5).sum()),
         ).reset_index()
         st.dataframe(readiness, use_container_width=True, hide_index=True)
 
@@ -239,36 +250,47 @@ elif page == "Event Deployment":
             st.success(f"Pool sufficient to cover expected attendance drop-offs.")
 
     with c_right:
-        st.subheader("Volunteer Map")
+        st.subheader("Volunteer Map & Regional Insights")
         map_rows =[]
         for nbhd in neighborhoods:
-            sub   = df[df['Neighborhood'] == nbhd] # Using entire df fixes the low count issue
+            sub   = df[df['Neighborhood'] == nbhd]
             coord = NBHD_COORDS.get(nbhd)
             if coord:
                 is_sel = sel_nbhd == nbhd or sel_nbhd == "All Regions"
                 map_rows.append({
                     'Neighborhood': nbhd, 'lat': coord[0], 'lon': coord[1],
-                    'Count': len(sub),
+                    'Volunteers': len(sub[sub['Type'] == 'Volunteer']),
+                    'Interns': len(sub[sub['Type'] == 'Intern']),
+                    'Total': len(sub),
                     'Avg Att': f"{sub['Att_Float'].mean():.0%}" if len(sub) > 0 else 'N/A',
                     'Status': 'Target Area' if is_sel else 'Outside',
                 })
         mdf = pd.DataFrame(map_rows)
         if len(mdf) > 0:
             fig_map = px.scatter_mapbox(
-                mdf, lat='lat', lon='lon', size='Count', color='Status',
+                mdf, lat='lat', lon='lon', size='Total', color='Status',
                 hover_name='Neighborhood',
-                hover_data={'lat':False,'lon':False,'Count':True,'Avg Att':True,'Status':False},
+                hover_data={'lat':False,'lon':False,'Volunteers':True,'Interns':True,'Avg Att':True,'Status':False},
                 size_max=38, zoom=10,
                 center=dict(lat=28.635, lon=77.135),
                 mapbox_style='carto-positron',
+                color_discrete_map={'Target Area': '#58a6ff', 'Outside': '#afb8c1'}
             )
-            fig_map.update_layout(margin=dict(l=0, r=0, t=0, b=0), height=300)
+            fig_map.update_layout(margin=dict(l=0, r=0, t=0, b=0), height=350)
             st.plotly_chart(fig_map, use_container_width=True)
 
-        st.subheader(f"Available Roster — {sel_nbhd}")
+        if sel_nbhd != "All Regions":
+            st.subheader(f"Regional Drill-down: {sel_nbhd}")
+            reg_sub = df[df['Neighborhood'] == sel_nbhd]
+            s1, s2, s3 = st.columns(3)
+            s1.metric("Volunteers", len(reg_sub[reg_sub['Type'] == 'Volunteer']))
+            s2.metric("Interns", len(reg_sub[reg_sub['Type'] == 'Intern']))
+            s3.metric("High Performers", len(reg_sub[reg_sub['Att_Float'] >= 0.8]))
+
+        st.subheader(f"Available Pool — {sel_nbhd}")
         st.dataframe(
-            local_pool[['Volunteer_ID','Full_Name','Skills','Has_Vehicle','Attendance_Rate','Preferred_Days']],
-            use_container_width=True, hide_index=True, height=200
+            local_pool[['Volunteer_ID','Full_Name','Type','Skills','Attendance_Rate','Preferred_Days']],
+            use_container_width=True, hide_index=True, height=250
         )
 
     st.divider()
@@ -287,17 +309,17 @@ POOL (no PII):
 OUTPUT — use these exact section headers:
 
 ## DEPLOYMENT MANIFEST
-List exactly {buffer_target} Volunteer IDs. Brief rationale (2 sentences).
+List exactly {buffer_target} Volunteer IDs. prioritize Volunteers over Interns. Brief rationale (2 sentences).
 
 ## ROLE ASSIGNMENT
-Markdown table: Volunteer_ID | Event Task | Reason
+Markdown table: Volunteer_ID | Event Task | Reason (note if they are an Intern/Volunteer)
 
 ## COMMUNICATION DRAFT
 Ready-to-send broadcast message for volunteers. Max 150 words. Include: event, date, task, report time, what to bring.
 
 ## RISK FLAGS
 Gaps, insufficient pool warnings, cross-region pull recommendations.
-""", "You are a professional NGO coordinator planning an event deployment.")
+""", "You are a professional NGO coordinator planning an event deployment.", model=MODEL_LARGE)
 
         st.info("AI Deployment Plan Generated")
         st.markdown(ai_out)
@@ -305,118 +327,79 @@ Gaps, insufficient pool warnings, cross-region pull recommendations.
         st.subheader("Contact List for Assigned Volunteers")
         found = list(set(re.findall(r'V-\d{3}', ai_out)))
         if found:
-            contacts = df[df['Volunteer_ID'].isin(found)][['Volunteer_ID','Full_Name','Phone_Number','Email','Skills','Has_Vehicle','Neighborhood']
+            contacts = df[df['Volunteer_ID'].isin(found)][['Volunteer_ID','Full_Name','Type','Phone_Number','Email','Skills','Has_Vehicle','Neighborhood']
             ].copy()
             st.dataframe(contacts, use_container_width=True, hide_index=True)
 
 # ════════════════════════════════════════════════════════════════════════════
-#  03 · UNIT LOGISTICS
+#  03 · UNIT LOGISTICS (CAREER GROWTH HUB)
 # ════════════════════════════════════════════════════════════════════════════
 elif page == "Unit Logistics":
-    st.title("Unit Logistics")
-    st.write("Organize volunteers into squads, set shift schedules, and generate role playbooks.")
+    st.title("Volunteer Growth Hub")
+    st.write("Empowering our workforce through AI-driven career coaching and skill development.")
 
-    c_left, c_right = st.columns([1, 2], gap="large")
+    ch1, ch2, ch3 = st.tabs(["🎓 Career Advisor", "🛣️ Skill Roadmap", "🎤 Mock Interviewer"])
 
-    with c_left:
-        st.subheader("Event Configuration")
-        event_name   = st.text_input("Event Name",   "Annual Food Drive")
-        event_dur    = st.selectbox("Duration", ["4 hours", "6 hours", "8 hours", "Full Day"])
-        shift_size   = st.selectbox("Shift Blocks", ["2 hours", "4 hours", "6 hours"])
-        nbhd_filter  = st.selectbox("Region Filter", ["All Regions"] + neighborhoods)
-        max_slots    = st.number_input("Volunteer Slots Needed", min_value=5, value=30, step=5)
-        squad_size   = st.number_input("Target Squad Size", min_value=2, value=10, step=1)
-        roles_needed = st.multiselect("Event Roles",[
-            "General Labor","Drivers","Medics","Food Handlers",
-            "Coordinators","Registration","Security","Media",
-        ], default=["General Labor","Drivers","Coordinators"])
-
-    with c_right:
-        st.subheader("Workforce Preview")
-        filtered = df.copy() if nbhd_filter == "All Regions" else df[df['Neighborhood'] == nbhd_filter].copy()
-        
-        # LOGIC FIX: Base math on the slots needed, not the total database
-        pool_size = len(filtered)
-        actual_slots = min(int(max_slots), pool_size) # Don't request more than we have
-        
-        # Calculate exactly how many squads are needed for the requested slots
-        n_squads = (actual_slots // squad_size) + (1 if actual_slots % squad_size > 0 else 0)
-        n_squads = max(n_squads, 1)
-
-        p1, p2, p3 = st.columns(3)
-        p1.metric("Available in Region", pool_size)
-        p2.metric("Event Slots", actual_slots)
-        p3.metric("Required Squads", n_squads)
-
-        # Show top candidates that will likely be picked
-        top_candidates = filtered.sort_values('Att_Float', ascending=False).head(actual_slots)
-        st.dataframe(
-            top_candidates[['Volunteer_ID','Full_Name','Skills','Preferred_Days','Attendance_Rate']],
-            use_container_width=True, hide_index=True, height=240
-        )
-
-        st.subheader("Event Squad Structure")
-        
-        # Build realistic chart data based on remainder math
-        squad_sizes =[]
-        rem = actual_slots
-        for i in range(n_squads):
-            if rem >= squad_size:
-                squad_sizes.append(squad_size)
-                rem -= squad_size
-            elif rem > 0:
-                squad_sizes.append(rem)
+    with ch1:
+        st.subheader("Personalized Career Path Advisor")
+        st.write("Get AI recommendations for your professional journey based on your volunteer experience.")
+        career_volunteer = st.selectbox("Select Volunteer for Career Advice:", df['Full_Name'].unique(), key="career_select")
+        if career_volunteer and st.button("🚀 Generate Career Paths", key="career_btn"):
+            person = df[df['Full_Name'] == career_volunteer].iloc[0]
+            with st.spinner("Analyzing career opportunities..."):
+                career_prompt = f"""
+                Volunteer: {person['Full_Name']}
+                Type: {person['Type']}
+                Skills: {person['Skills']}
+                Interests: {person['Interests']}
+                Attendance: {person['Attendance_Rate']}
                 
-        sq_names =[f"Squad {chr(65+i)}" for i in range(len(squad_sizes))]
+                Based on this profile, suggest 3 career paths (e.g., NGO Management, Public Relations, Operations) 
+                and explain how their volunteer work at our NGO prepares them for these roles.
+                """
+                response = call_ai(career_prompt, "You are a professional career coach and NGO advisor.", model=MODEL_LARGE)
+                st.markdown(response)
+
+    with ch2:
+        st.subheader("🛣️ Personalized Skill Development Roadmap")
+        st.write("A 6-month AI-generated learning path tailored to your professional goals.")
+        roadmap_volunteer = st.selectbox("Select Volunteer for Skill Roadmap:", df['Full_Name'].unique(), key="roadmap_select")
+        goal = st.text_input("What is your ultimate professional goal?", value="Project Management in Social Sector")
         
-        fig_sq = go.Figure()
-        fig_sq.add_bar(name='Volunteers', x=sq_names, y=squad_sizes, marker_color='#58a6ff')
-        fig_sq.update_layout(
-            barmode='stack', 
-            title=f'{actual_slots} VOLUNTEERS ACROSS {n_squads} SQUADS', 
-            margin=dict(t=30, b=0, l=0, r=0), 
-            height=250,
-            yaxis=dict(range=[0, squad_size + 2]) # Keep Y-axis scaled nicely
-        )
-        st.plotly_chart(fig_sq, use_container_width=True)
+        if roadmap_volunteer and st.button("📚 Build My Learning Path", key="roadmap_btn"):
+            person = df[df['Full_Name'] == roadmap_volunteer].iloc[0]
+            with st.spinner("Creating roadmap..."):
+                roadmap_prompt = f"""
+                Volunteer: {person['Full_Name']}
+                Current Skills: {person['Skills']}
+                Goal: {goal}
+                
+                Create a 6-month roadmap with month-by-month actionable steps, free resources, and skill milestones.
+                """
+                response = call_ai(roadmap_prompt, "You are a professional skill development coach.", model=MODEL_LARGE)
+                st.markdown(response)
 
-    st.divider()
+    with ch3:
+        st.subheader("🎤 AI Mock Interviewer")
+        st.write("Practice for your next professional role with real-time AI feedback.")
+        interview_volunteer = st.selectbox("Select Volunteer for Interview:", df['Full_Name'].unique(), key="interview_select")
+        target_role = st.text_input("What role are you interviewing for?", value="Program Coordinator")
+        
+        if interview_volunteer and st.button("Generate Interview Question", key="interview_btn"):
+            person = df[df['Full_Name'] == interview_volunteer].iloc[0]
+            with st.spinner("Preparing question..."):
+                int_prompt = f"Volunteer: {person['Full_Name']}, Skills: {person['Skills']}. Target Role: {target_role}. Ask one tough behavioral interview question."
+                st.session_state["current_question"] = call_ai(int_prompt, "You are an NGO hiring manager.", model=MODEL_SMALL)
+                
+        if "current_question" in st.session_state:
+            st.info(st.session_state["current_question"])
+            user_answer = st.text_area("Your Answer:")
+            if st.button("Evaluate Answer", key="eval_btn"):
+                with st.spinner("Evaluating..."):
+                    eval_prompt = f"Question: {st.session_state['current_question']}\nAnswer: {user_answer}. Evaluate the answer and give constructive feedback."
+                    eval_res = call_ai(eval_prompt, "You are an NGO hiring manager.", model=MODEL_LARGE)
+                    st.success(eval_res)
 
-    if st.button("Generate Squad Schedule", type="primary"):
-        with st.spinner("Structuring squads and shifts..."):
-            safe_pool = top_candidates[['Volunteer_ID','Skills','Preferred_Days','Att_Float']].copy()
-            ai_out = call_ai(f"""
-EVENT: {event_name} | DURATION: {event_dur} | SHIFT BLOCKS: {shift_size}
-ROLES: {', '.join(roles_needed)}
-RULE: Organize exactly {actual_slots} Volunteers into {n_squads} squads (max {squad_size} per squad).
-
-POOL (Top {actual_slots} candidates):
-{safe_pool.to_csv(index=False)}
-
-OUTPUT — use these exact section headers:
-
-## SQUAD STRUCTURE
-Table: Squad Name | Member IDs | Role focus
-
-## SHIFT SCHEDULE
-Table: Block | Time | Squad | Task | Notes
-
-## ROLE PLAYBOOK
-For each role ({', '.join(roles_needed)}): 2-3 concise bullets detailing responsibilities.
-
-## SUMMARY
-A brief summary paragraph of the plan.
-""", "You are a professional NGO coordinator specializing in squad logistics.")
-
-        st.info("Squad Schedule Generated")
-        st.markdown(ai_out)
-
-        st.subheader("Selected Personnel Roster")
-        found = list(set(re.findall(r'V-\d{3}', ai_out)))
-        if found:
-            roster = df[df['Volunteer_ID'].isin(found)][['Volunteer_ID','Full_Name','Phone_Number','Skills','Neighborhood']
-            ].copy()
-            st.dataframe(roster, use_container_width=True, hide_index=True)
 # ════════════════════════════════════════════════════════════════════════════
 #  04 · VOLUNTEER ANALYTICS
 # ════════════════════════════════════════════════════════════════════════════
@@ -434,18 +417,16 @@ elif page == "Volunteer Analytics":
             rdf     = df[df['Neighborhood'] == reg]
             r_sk    = list(set(parse_skills(rdf['Skills'])))
             missing =[s for s in g_skills if s not in r_sk]
-            gap_rows.append({'Region':reg,'Headcount':len(rdf),
-                             'Skills Present':len(r_sk),'Skill Gaps':len(missing),
+            gap_rows.append({'Region':reg,
+                             'Volunteers': len(rdf[rdf['Type']=='Volunteer']),
+                             'Interns': len(rdf[rdf['Type']=='Intern']),
+                             'Skill Gaps':len(missing),
                              'Missing Skills': ', '.join(missing[:5])+('…' if len(missing)>5 else '')})
         gap_df = pd.DataFrame(gap_rows).sort_values('Skill Gaps', ascending=False)
 
         g1, g2 = st.columns([2, 3])
         with g1:
-            fig_g = go.Figure(go.Bar(
-                x=gap_df['Skill Gaps'], y=gap_df['Region'], orientation='h',
-                text=gap_df['Skill Gaps'], textposition='auto',
-                marker_color='#f5b041'
-            ))
+            fig_g = px.bar(gap_df, x='Skill Gaps', y='Region', orientation='h', color_discrete_sequence=['#f5b041'])
             fig_g.update_layout(margin=dict(t=10, b=0, l=0, r=0), height=320)
             st.plotly_chart(fig_g, use_container_width=True)
         with g2:
@@ -457,19 +438,9 @@ elif page == "Volunteer Analytics":
         if st.button("Generate Recruitment Material", type="primary", key="gap_btn"):
             row = gap_df[gap_df['Region']==sel_reg].iloc[0]
             with st.spinner("Drafting campaign..."):
-                ai_out = call_ai(f"""
-Region: {sel_reg} | Current Headcount: {row['Headcount']} | Missing Skills: {row['Missing Skills']}
-
-Draft recruitment materials to find volunteers with these specific skills.
-
-## SOCIAL MEDIA POST
-Engaging and professional. 100 words max. Include a call to action.
-
-## OUTREACH CHANNELS
-3 specific, actionable ideas to reach people with these skills in {sel_reg}.
-""", "You are an NGO recruitment specialist.")
-            st.info("Materials Generated")
-            st.markdown(ai_out)
+                ai_out = call_ai(f"Region: {sel_reg} | Missing Skills: {row['Missing Skills']}. Draft social media post.", model=MODEL_LARGE)
+                st.info("Materials Generated")
+                st.markdown(ai_out)
 
     with t2:
         st.subheader("Retention & Re-engagement")
@@ -478,43 +449,21 @@ Engaging and professional. 100 words max. Include a call to action.
 
         cc1, cc2 = st.columns([1, 3])
         with cc1:
-            st.metric("At-Risk Volunteers", len(churn), help=f"Below {thresh}% attendance")
-            st.write(f"**{len(churn)/len(df):.0%}** of total workforce")
-            
-            churn_by_region = churn.groupby('Neighborhood').size().reset_index(name='Count')
-            fig_cr = go.Figure(go.Bar(
-                x=churn_by_region['Count'], 
-                y=churn_by_region['Neighborhood'], 
-                orientation='h',
-                marker_color='#e74c3c'
-            ))
-            fig_cr.update_layout(title='By Region', margin=dict(t=30, b=0, l=0, r=0), height=250)
+            st.metric("At-Risk Total", len(churn))
+            st.write(f"**{len(churn[churn['Type']=='Volunteer'])}** Volunteers | **{len(churn[churn['Type']=='Intern'])}** Interns")
+            churn_by_type = churn.groupby('Type').size().reset_index(name='Count')
+            fig_cr = px.pie(churn_by_type, values='Count', names='Type', hole=.4, color_discrete_map={'Volunteer':'#e74c3c','Intern':'#f5b041'})
+            fig_cr.update_layout(margin=dict(t=0, b=0, l=0, r=0), height=200)
             st.plotly_chart(fig_cr, use_container_width=True)
-
         with cc2:
-            st.dataframe(
-                churn[['Volunteer_ID','Full_Name','Neighborhood','Attendance_Rate','Skills']],
-                use_container_width=True, hide_index=True, height=420
-            )
+            st.dataframe(churn[['Volunteer_ID','Full_Name','Type','Neighborhood','Attendance_Rate']], use_container_width=True, hide_index=True, height=340)
 
         if len(churn) > 0:
             if st.button("Generate Re-engagement Strategy", type="primary", key="churn_btn"):
                 with st.spinner("Building strategy..."):
-                    safe_c = churn[['Volunteer_ID','Neighborhood','Skills','Attendance_Rate']].head(20)
-                    ai_out = call_ai(f"""
-We have {len(churn)} volunteers falling below our {thresh}% attendance threshold.
-
-Sample profiles:
-{safe_c.to_csv(index=False)}
-
-## RE-ENGAGEMENT MESSAGE
-Draft a warm, non-judgmental email or message checking in on them and inviting them back. 150 words max.
-
-## RETENTION TACTICS
-Provide 3 practical ideas to improve attendance among this group based on standard NGO best practices.
-""", "You are a community engagement manager for an NGO.")
-                st.info("Strategy Generated")
-                st.markdown(ai_out)
+                    ai_out = call_ai(f"We have {len(churn)} at-risk volunteers. Draft check-in message and 3 retention tactics.", model=MODEL_LARGE)
+                    st.info("Strategy Generated")
+                    st.markdown(ai_out)
 
     with t3:
         st.subheader("Top Performers Recognition")
@@ -523,78 +472,55 @@ Provide 3 practical ideas to improve attendance among this group based on standa
 
         pp1, pp2 = st.columns([1, 2])
         with pp1:
-            st.metric("Qualified Top Performers", len(candidates))
-            
+            st.metric("Total High Performers", len(candidates))
+            st.write(f"**{len(candidates[candidates['Type']=='Volunteer'])}** Volunteers | **{len(candidates[candidates['Type']=='Intern'])}** Interns")
             top10 = candidates.head(10)
-            fig_p = go.Figure(go.Bar(
-                x=top10['Volunteer_ID'], y=top10['Att_Float'],
-                text=[f"{v:.0%}" for v in top10['Att_Float']], textposition='auto',
-                marker_color='#2ecc71'
-            ))
-            fig_p.update_layout(title='Highest Attendance Scores', margin=dict(t=30, b=0, l=0, r=0), height=220)
-            fig_p.update_yaxes(tickformat='.0%')
+            fig_p = px.bar(top10, x='Volunteer_ID', y='Att_Float', color='Type', color_discrete_map={'Volunteer':'#2ecc71','Intern':'#f5b041'})
+            fig_p.update_layout(title='Top Attendance Scores', margin=dict(t=30, b=0, l=0, r=0), height=220)
             st.plotly_chart(fig_p, use_container_width=True)
-
         with pp2:
-            st.dataframe(
-                candidates[['Volunteer_ID','Full_Name','Neighborhood','Attendance_Rate','Skills']],
-                use_container_width=True, hide_index=True, height=380
-            )
+            st.dataframe(candidates[['Volunteer_ID','Full_Name','Type','Neighborhood','Attendance_Rate']], use_container_width=True, hide_index=True, height=340)
 
         if len(candidates) > 0:
             if st.button("Draft Recognition Briefing", type="primary", key="promo_btn"):
                 with st.spinner("Drafting briefing..."):
-                    safe_p = candidates[['Volunteer_ID','Neighborhood','Skills','Attendance_Rate']].head(10)
-                    ai_out = call_ai(f"""
-Top performing volunteers (attendance ≥ {p_thresh}%):
-{safe_p.to_csv(index=False)}
-
-## RECOGNITION RECOMMENDATIONS
-Highlight the top 3 IDs and how their specific skills make them incredibly valuable to our events.
-
-## THANK YOU MESSAGE
-Draft a warm, professional email thanking them for their outstanding attendance and continuous dedication.
-""", "You are a volunteer engagement coordinator for an NGO.")
-                st.info("Briefing Generated")
-                st.markdown(ai_out)
+                    ai_out = call_ai(f"Top performing volunteers (attendance ≥ {p_thresh}%). Draft thank you email and recognition brief.", model=MODEL_LARGE)
+                    st.info("Briefing Generated")
+                    st.markdown(ai_out)
 
 # ════════════════════════════════════════════════════════════════════════════
 #  05 · AI ASSISTANT
 # ════════════════════════════════════════════════════════════════════════════
 elif page == "AI Assistant":
     st.title("AI Assistant")
-    st.write("Chat with an AI assistant that understands your workforce data overview. (No personal data is shared)")
+    st.write("Chat with an AI assistant that understands your workforce data.")
 
-    region_ctx = df.groupby('Neighborhood').agg(
-        Headcount=('Volunteer_ID','count'),
-        Avg_Att=('Att_Float','mean'),
-    ).reset_index().to_csv(index=False)
-
+    region_ctx = df.groupby('Neighborhood').agg(Headcount=('Volunteer_ID','count'), Avg_Att=('Att_Float','mean')).reset_index().to_csv(index=False)
     top_skills = pd.Series(parse_skills(df['Skills'])).value_counts().head(20).to_string()
 
-    SYSTEM = f"""You are a helpful and professional NGO operations assistant.
+    SYSTEM = f"NGO Assistant. Workforce: {len(df)}. Avg Att: {avg_att:.0%}. Regions: {len(neighborhoods)}.\nDATA:\n{region_ctx}\nSKILLS:\n{top_skills}"
 
-DATA SNAPSHOT:
-- Total Workforce: {len(df)} Volunteers
-- Average Attendance: {avg_att:.0%} | Active Regions: {len(neighborhoods)}
-- At-Risk Volunteers (<50%): {len(df[df['Att_Float']<0.50])}
+    if "cop_msgs" not in st.session_state: st.session_state.cop_msgs =[]
+    for msg in st.session_state.cop_msgs:
+        with st.chat_message(msg["role"]): st.markdown(msg["content"])
 
-REGIONAL DATA:
-{region_ctx}
+    if prompt := st.chat_input("Ask about your data..."):
+        st.session_state.cop_msgs.append({"role":"user","content":prompt})
+        with st.chat_message("user"): st.markdown(prompt)
+        with st.chat_message("assistant"):
+            ai_reply = call_ai(prompt, SYSTEM, model=MODEL_SMALL)
+            st.markdown(ai_reply)
+            st.session_state.cop_msgs.append({"role":"assistant","content":ai_reply})
 
-TOP SKILLS IN ROSTER:
-{top_skills}
-
-Please answer questions based on this data. Be concise, polite, and helpful. Never request or reveal personal data."""
-
-    if "cop_msgs" not in st.session_state:
+    st.divider()
+    d1, d2 = st.columns(2)
+    if d1.button("Clear Chat", key="clear_cop"):
         st.session_state.cop_msgs =[]
-
-    st.subheader("Suggested Questions")
-    qcols = st.columns(4)
-    quick_queries =[
-        "Which region has the lowest attendance?",
-        "Do we have enough medics for an event?",
+        st.rerun()
+    if d2.button("Generate Status Report", type="primary", key="donor_rpt"):
+        with st.spinner("Compiling report..."):
+            st.markdown(call_ai("Write a professional NGO Workforce Status Report based on data.", SYSTEM, model=MODEL_LARGE))
+ugh medics for an event?",
         "What skills are most common?",
         "Give me a brief overview of our workforce.",
     ]
