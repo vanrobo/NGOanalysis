@@ -250,6 +250,9 @@ if page == "Overview Dashboard":
 elif page == "Event Deployment":
     st.title("Event Deployment Planning")
     st.write("Plan an event, set requirements, and generate a recommended deployment manifest.")
+    
+    # Debug: Show active events count
+    st.info(f"📊 Session State: {len(st.session_state.active_events)} active events | {len(st.session_state.event_history)} completed events")
 
     c_left, c_right = st.columns([1, 2], gap="large")
 
@@ -372,47 +375,55 @@ Gaps, insufficient pool warnings, cross-region recommendations.
         st.markdown(ai_out)
 
         st.subheader("Contact List for Assigned Volunteers")
+        # Extract volunteer IDs from AI output (try multiple patterns)
         found = list(set(re.findall(r'V-\d{3}', ai_out)))
+        
+        # Fallback: if no matches, try to get top volunteers from pool
+        if not found:
+            st.warning("⚠️ Could not extract specific volunteer IDs from AI output. Selecting from available pool...")
+            found = local_pool['Volunteer_ID'].head(min(target_count * 2, len(local_pool))).tolist()
+        
         if found:
             contacts = df[df['Volunteer_ID'].isin(found)][['Volunteer_ID','Full_Name','Type','Phone_Number','Email','Skills','Has_Vehicle','Neighborhood']].copy()
             
-            # ═══ ADD WHATSAPP LINKS ═══
-            def generate_whatsapp_link(row):
-                try:
-                    phone = str(row['Phone_Number']).replace('+', '').replace('-', '').replace(' ', '').replace('(', '').replace(')', '')
-                    if not phone.startswith('+'):
-                        phone = '+91' + phone if len(phone) == 10 else '+' + phone
-                    else:
-                        phone = '+' + phone.lstrip('+')
-                    
-                    message = f"Hi {row['Full_Name']}, you have been selected for {event_name} on {event_date}. Please confirm your availability. Thank you!"
-                    whatsapp_url = f"https://wa.me/{phone}?text={message.replace(' ', '%20')}"
-                    return whatsapp_url
-                except:
-                    return ""
-            
-            contacts['WhatsApp_Link'] = contacts.apply(generate_whatsapp_link, axis=1)
-            
-            # Display with clickable WhatsApp links
-            st.dataframe(
-                contacts,
-                use_container_width=True,
-                hide_index=True,
-                column_config={
-                    "WhatsApp_Link": st.column_config.LinkColumn(
-                        "WhatsApp Link",
-                        display_text="📱 Chat"
-                    )
-                }
-            )
+            if len(contacts) > 0:
+                # ═══ ADD WHATSAPP LINKS ═══
+                def generate_whatsapp_link(row):
+                    try:
+                        phone = str(row['Phone_Number']).replace('+', '').replace('-', '').replace(' ', '').replace('(', '').replace(')', '')
+                        if not phone.startswith('+'):
+                            phone = '+91' + phone if len(phone) == 10 else '+' + phone
+                        else:
+                            phone = '+' + phone.lstrip('+')
+                        
+                        message = f"Hi {row['Full_Name']}, you have been selected for {event_name} on {event_date}. Please confirm your availability. Thank you!"
+                        whatsapp_url = f"https://wa.me/{phone}?text={message.replace(' ', '%20')}"
+                        return whatsapp_url
+                    except:
+                        return ""
+                
+                contacts['WhatsApp_Link'] = contacts.apply(generate_whatsapp_link, axis=1)
+                
+                # Display with clickable WhatsApp links
+                st.dataframe(
+                    contacts,
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={
+                        "WhatsApp_Link": st.column_config.LinkColumn(
+                            "WhatsApp Link",
+                            display_text="📱 Chat"
+                        )
+                    }
+                )
         
         st.divider()
-        st.subheader("Save & Publish Event")
+        st.subheader("💾 Save & Publish Event")
         
         col_save, col_complete = st.columns([1, 1])
         
         with col_save:
-            if st.button("💾 Save Event & Publish", type="primary"):
+            if st.button("Save Event & Publish", type="primary", key="save_event_btn"):
                 event_id = f"EVT_{len(st.session_state.active_events) + 1:03d}"
                 st.session_state.active_events[event_id] = {
                     'name': event_name,
@@ -426,15 +437,16 @@ Gaps, insufficient pool warnings, cross-region recommendations.
                     'created_at': datetime.now().isoformat()
                 }
                 st.success(f"✅ Event saved and published! Event ID: {event_id}")
-                st.rerun()
+                st.balloons()
         
         with col_complete:
             if st.session_state.active_events:
                 event_to_close = st.selectbox(
                     "Select an active event to close:",
-                    list(st.session_state.active_events.keys())
+                    list(st.session_state.active_events.keys()),
+                    key="close_event_select"
                 )
-                if st.button("✓ Close/Complete Event"):
+                if st.button("Close/Complete Event", key="close_event_btn"):
                     event_data = st.session_state.active_events.pop(event_to_close)
                     completed_event = {
                         'event_id': event_to_close,
@@ -447,12 +459,12 @@ Gaps, insufficient pool warnings, cross-region recommendations.
                     st.rerun()
         
         st.divider()
-        st.subheader("Active & Historical Events")
+        st.subheader("Active & Historical Events Summary")
         
         if st.session_state.active_events:
             st.write("**🔴 Active Events:**")
             for evt_id, evt_data in st.session_state.active_events.items():
-                st.caption(f"**{evt_id}:** {evt_data['name']} - {evt_data['neighborhood']} - {evt_data['assigned_volunteers'].__len__()} volunteers")
+                st.caption(f"**{evt_id}:** {evt_data['name']} - {evt_data['neighborhood']} - {len(evt_data['assigned_volunteers'])} volunteers")
 
 # ════════════════════════════════════════════════════════════════════════════
 #  03 · CAREER GROWTH HUB
@@ -682,9 +694,12 @@ STRICT RULES:
 # ════════════════════════════════════════════════════════════════════════════
 #  06 · EVENT TRANSPARENCY (Admin Only)
 # ════════════════════════════════════════════════════════════════════════════
-elif page == "Event Transparency" and user_role == "Admin":
+elif page == "Event Transparency":
     st.title("📊 Event Transparency Dashboard")
     st.write("Track all active and historical events with volunteer participation metrics.")
+    
+    # Debug display
+    st.info(f"📊 Current Session: {len(st.session_state.active_events)} active | {len(st.session_state.event_history)} completed")
     
     t1, t2, t3 = st.tabs(["Active Events", "Event History", "Participation Analytics"])
     
@@ -696,11 +711,14 @@ elif page == "Event Transparency" and user_role == "Admin":
                     col1, col2, col3, col4 = st.columns(4)
                     col1.metric("Date", evt_data['date'])
                     col2.metric("Target", evt_data['target_count'])
-                    col3.metric("Assigned", len(evt_data['assigned_volunteers']))
+                    col3.metric("Assigned", len(evt_data.get('assigned_volunteers', [])))
                     col4.metric("Skills Needed", evt_data['required_skills'][:25] + "..." if len(evt_data['required_skills']) > 25 else evt_data['required_skills'])
                     st.markdown("**Assigned Volunteers:**")
-                    assigned_details = df[df['Volunteer_ID'].isin(evt_data['assigned_volunteers'])][['Volunteer_ID', 'Full_Name', 'Type', 'Event_Count', 'Attendance_Rate']]
-                    st.dataframe(assigned_details, use_container_width=True, hide_index=True)
+                    if evt_data.get('assigned_volunteers'):
+                        assigned_details = df[df['Volunteer_ID'].isin(evt_data['assigned_volunteers'])][['Volunteer_ID', 'Full_Name', 'Type', 'Event_Count', 'Attendance_Rate']]
+                        st.dataframe(assigned_details, use_container_width=True, hide_index=True)
+                    else:
+                        st.write("No volunteers assigned")
         else:
             st.info("No active events. Create one in the Event Deployment page.")
     
@@ -712,11 +730,16 @@ elif page == "Event Transparency" and user_role == "Admin":
                     col1, col2, col3, col4 = st.columns(4)
                     col1.metric("Neighborhood", event_rec['neighborhood'])
                     col2.metric("Target", event_rec['target_count'])
-                    col3.metric("Attended", len(event_rec['attendees']))
-                    col4.metric("Attendance %", f"{(len(event_rec['attendees']) / event_rec['target_count'] * 100):.0f}%" if event_rec['target_count'] > 0 else "N/A")
+                    col3.metric("Attended", len(event_rec.get('attendees', [])))
+                    attendee_count = len(event_rec.get('attendees', []))
+                    target = event_rec.get('target_count', 1)
+                    col4.metric("Attendance %", f"{(attendee_count / target * 100):.0f}%" if target > 0 else "N/A")
                     st.markdown("**Attendee Details:**")
-                    attendee_details = df[df['Volunteer_ID'].isin(event_rec['attendees'])][['Volunteer_ID', 'Full_Name', 'Type', 'Attendance_Rate']]
-                    st.dataframe(attendee_details, use_container_width=True, hide_index=True)
+                    if event_rec.get('attendees'):
+                        attendee_details = df[df['Volunteer_ID'].isin(event_rec['attendees'])][['Volunteer_ID', 'Full_Name', 'Type', 'Attendance_Rate']]
+                        st.dataframe(attendee_details, use_container_width=True, hide_index=True)
+                    else:
+                        st.write("No attendee records")
         else:
             st.info("No completed events yet.")
     
@@ -727,37 +750,40 @@ elif page == "Event Transparency" and user_role == "Admin":
             # Participation counts
             participation = {}
             for event_rec in st.session_state.event_history:
-                for vol_id in event_rec['attendees']:
+                for vol_id in event_rec.get('attendees', []):
                     participation[vol_id] = participation.get(vol_id, 0) + 1
             
-            part_df = pd.DataFrame(list(participation.items()), columns=['Volunteer_ID', 'Events_Attended'])
-            part_df = part_df.merge(df[['Volunteer_ID', 'Full_Name', 'Type']], on='Volunteer_ID')
-            part_df = part_df.sort_values('Events_Attended', ascending=False)
-            
-            col_a, col_b = st.columns(2)
-            
-            with col_a:
-                st.metric("Total Events Completed", len(st.session_state.event_history))
-                st.metric("Volunteers Engaged", len(participation))
-                avg_participation = part_df['Events_Attended'].mean()
-                st.metric("Avg Events per Volunteer", f"{avg_participation:.1f}")
-            
-            with col_b:
-                fig_part = px.bar(part_df.head(15), x='Full_Name', y='Events_Attended', color='Type', 
-                                 color_discrete_map={'Volunteer': '#58a6ff', 'Intern': '#f5b041'})
-                fig_part.update_layout(title='Top Participants', xaxis_title='', yaxis_title='Events Attended', 
-                                      margin=dict(t=30, b=0, l=0, r=0), height=350)
-                st.plotly_chart(fig_part, use_container_width=True)
-            
-            st.subheader("Participation Summary")
-            st.dataframe(part_df, use_container_width=True, hide_index=True, height=400)
+            if participation:
+                part_df = pd.DataFrame(list(participation.items()), columns=['Volunteer_ID', 'Events_Attended'])
+                part_df = part_df.merge(df[['Volunteer_ID', 'Full_Name', 'Type']], on='Volunteer_ID', how='left')
+                part_df = part_df.sort_values('Events_Attended', ascending=False)
+                
+                col_a, col_b = st.columns(2)
+                
+                with col_a:
+                    st.metric("Total Events Completed", len(st.session_state.event_history))
+                    st.metric("Volunteers Engaged", len(participation))
+                    avg_participation = part_df['Events_Attended'].mean()
+                    st.metric("Avg Events per Volunteer", f"{avg_participation:.1f}")
+                
+                with col_b:
+                    fig_part = px.bar(part_df.head(15), x='Full_Name', y='Events_Attended', color='Type', 
+                                     color_discrete_map={'Volunteer': '#58a6ff', 'Intern': '#f5b041'})
+                    fig_part.update_layout(title='Top Participants', xaxis_title='', yaxis_title='Events Attended', 
+                                          margin=dict(t=30, b=0, l=0, r=0), height=350)
+                    st.plotly_chart(fig_part, use_container_width=True)
+                
+                st.subheader("Participation Summary")
+                st.dataframe(part_df, use_container_width=True, hide_index=True, height=400)
+            else:
+                st.info("No participation data yet. Complete events to see analytics.")
         else:
             st.info("No participation data yet. Complete events to see analytics.")
 
 # ════════════════════════════════════════════════════════════════════════════
 #  07 · VOLUNTEER VIEW (Volunteers Only)
 # ════════════════════════════════════════════════════════════════════════════
-elif page == "Volunteer View" and user_role == "Volunteer":
+elif page == "Volunteer View":
     st.title("🙋 Volunteer Portal")
     st.write("Your personalized volunteer dashboard with event opportunities and growth paths.")
     
@@ -797,13 +823,19 @@ elif page == "Volunteer View" and user_role == "Volunteer":
             st.divider()
             st.markdown("**Current Skills**")
             skills_list = [s.strip() for s in str(vol_record['Skills']).split(';') if s.strip()]
-            for skill in skills_list:
-                st.badge(skill, text_color="white")
+            if skills_list:
+                skill_pills = " | ".join([f"🏷️ {skill}" for skill in skills_list])
+                st.write(skill_pills)
+            else:
+                st.write("No skills listed")
             
             st.markdown("**Interests**")
             interests_list = [i.strip() for i in str(vol_record['Interests']).split(';') if i.strip()]
-            for interest in interests_list:
-                st.badge(interest, text_color="white")
+            if interests_list:
+                interest_pills = " | ".join([f"❤️ {interest}" for interest in interests_list])
+                st.write(interest_pills)
+            else:
+                st.write("No interests listed")
             
             st.divider()
             st.markdown("**📊 Event History**")
