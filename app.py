@@ -5,6 +5,7 @@ import os, re
 from dotenv import load_dotenv
 import plotly.graph_objects as go
 import plotly.express as px
+from datetime import datetime
 
 load_dotenv()
 
@@ -94,14 +95,28 @@ def parse_skills(series):
 # ─── SIDEBAR ──────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.title("NGO Portal")
-    page = st.radio("Navigation",[
-        "Overview Dashboard",
-        "Event Deployment",
-        "Career Growth Hub",
-        "Volunteer Analytics",
-        "AI Assistant",
-    ])
+    
+    # ═══ ROLE-BASED ACCESS CONTROL ═══
+    user_role = st.radio("Login as:", ["Admin", "Volunteer"], label_visibility="visible")
     st.divider()
+    
+    # ═══ CONDITIONAL NAVIGATION ═══
+    if user_role == "Admin":
+        page = st.radio("Navigation",[
+            "Overview Dashboard",
+            "Event Deployment",
+            "Career Growth Hub",
+            "Volunteer Analytics",
+            "AI Assistant",
+            "Event Transparency",
+        ])
+    else:  # Volunteer
+        page = st.radio("Navigation",[
+            "Volunteer View",
+        ])
+    
+    st.divider()
+    
     uploaded_file = st.file_uploader("Upload Volunteer Database (CSV)", type="csv")
     
     if uploaded_file:
@@ -143,6 +158,20 @@ try:
 except Exception as e:
     st.error(f"Error processing the CSV file: {e}")
     st.stop()
+
+# ═══ SESSION STATE INITIALIZATION FOR NEW FEATURES ═══
+if "active_events" not in st.session_state:
+    st.session_state.active_events = {}
+if "event_history" not in st.session_state:
+    st.session_state.event_history = []
+
+# Calculate event_count per volunteer from history
+event_counts = {}
+for event_record in st.session_state.event_history:
+    for vol_id in event_record.get('attendees', []):
+        event_counts[vol_id] = event_counts.get(vol_id, 0) + 1
+
+df['Event_Count'] = df['Volunteer_ID'].map(lambda x: event_counts.get(x, 0))
 
 avg_att = df['Att_Float'].mean()
 neighborhoods = sorted(df['Neighborhood'].unique().tolist())
@@ -297,7 +326,7 @@ elif page == "Event Deployment":
 
     if st.button("Generate Deployment Plan", type="primary"):
         with st.spinner("Analyzing pool and building deployment plan..."):
-            safe = local_pool[['Volunteer_ID','Skills','Has_Vehicle','Attendance_Rate','Preferred_Days','Neighborhood']].copy()
+            safe = local_pool[['Volunteer_ID','Full_Name','Skills','Has_Vehicle','Attendance_Rate','Preferred_Days','Neighborhood','Event_Count']].copy()
             ai_out = call_ai(f"""
 EVENT: {event_name} | DATE: {event_date} | REGION: {sel_nbhd}
 TARGET: {target_count} | BUFFER TARGET: {buffer_target} (local avg {local_avg:.0%})
@@ -306,20 +335,38 @@ REQUIRED SKILLS: {req_skills} | VEHICLE: {req_vehicle}
 POOL (no PII):
 {safe.to_csv(index=False)}
 
+FAIRNESS & FUZZY MATCHING RULES:
+1. FUZZY SKILL MATCHING: If event requires "{req_skills}", accept volunteers with RELATED skills. 
+   For example: "10th Grade Math" → person with "Engineering" or "Teaching" is eligible (skills transfer).
+   "Web Development" → accept "Full-Stack", "Frontend", "Backend", "JavaScript", "Python" experts.
+   Explain the skill match rationale.
+
+2. FAIRNESS CONSTRAINT: Volunteers with lower Event_Count should be prioritized to prevent burnout and ensure fairness.
+   For example: If person A has Event_Count=10 and person B has Event_Count=2, both equally skilled, pick person B.
+   This ensures equitable participation across your team.
+
+3. LEARNER-EXPERT PAIRING: Try to pair one or two "Learners" with "Experts" for this event. 
+   A Learner is someone volunteering for the first time or with low event count (< 3).
+   An Expert is someone with high event count (> 5) or strong skills match.
+
 OUTPUT - use these exact section headers:
 
 ## DEPLOYMENT MANIFEST
-List exactly {buffer_target} Volunteer IDs. prioritize Volunteers over Interns. Brief rationale (2 sentences).
+List exactly {buffer_target} Volunteer IDs. Prioritize Volunteers over Interns. Include rationale (2 sentences).
 
 ## ROLE ASSIGNMENT
-Markdown table: Volunteer_ID | Event Task | Reason (note if they are an Intern/Volunteer)
+Markdown table: Volunteer_ID | Full_Name | Event Task | Role | Reason
+Note: Mark SHADOW roles for learners paired with experts.
 
 ## COMMUNICATION DRAFT
-Ready-to-send broadcast message for volunteers. Max 150 words. Include: event, date, task, report time, what to bring.
+Ready-to-send broadcast message. Max 150 words. Include: event, date, task, report time, what to bring.
+
+## FAIRNESS & SKILL MATCH NOTES
+Explain fuzzy matches and fairness decisions. Which volunteers were paired as Learner-Expert?
 
 ## RISK FLAGS
-Gaps, insufficient pool warnings, cross-region pull recommendations.
-""", "You are a professional NGO coordinator planning an event deployment.", model=MODEL_LARGE)
+Gaps, insufficient pool warnings, cross-region recommendations.
+""", "You are a professional NGO coordinator planning an event deployment with a commitment to fairness and skill development.", model=MODEL_LARGE)
 
         st.info("AI Deployment Plan Generated")
         st.markdown(ai_out)
@@ -327,9 +374,85 @@ Gaps, insufficient pool warnings, cross-region pull recommendations.
         st.subheader("Contact List for Assigned Volunteers")
         found = list(set(re.findall(r'V-\d{3}', ai_out)))
         if found:
-            contacts = df[df['Volunteer_ID'].isin(found)][['Volunteer_ID','Full_Name','Type','Phone_Number','Email','Skills','Has_Vehicle','Neighborhood']
-            ].copy()
-            st.dataframe(contacts, use_container_width=True, hide_index=True)
+            contacts = df[df['Volunteer_ID'].isin(found)][['Volunteer_ID','Full_Name','Type','Phone_Number','Email','Skills','Has_Vehicle','Neighborhood']].copy()
+            
+            # ═══ ADD WHATSAPP LINKS ═══
+            def generate_whatsapp_link(row):
+                try:
+                    phone = str(row['Phone_Number']).replace('+', '').replace('-', '').replace(' ', '').replace('(', '').replace(')', '')
+                    if not phone.startswith('+'):
+                        phone = '+91' + phone if len(phone) == 10 else '+' + phone
+                    else:
+                        phone = '+' + phone.lstrip('+')
+                    
+                    message = f"Hi {row['Full_Name']}, you have been selected for {event_name} on {event_date}. Please confirm your availability. Thank you!"
+                    whatsapp_url = f"https://wa.me/{phone}?text={message.replace(' ', '%20')}"
+                    return whatsapp_url
+                except:
+                    return ""
+            
+            contacts['WhatsApp_Link'] = contacts.apply(generate_whatsapp_link, axis=1)
+            
+            # Display with clickable WhatsApp links
+            st.dataframe(
+                contacts,
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "WhatsApp_Link": st.column_config.LinkColumn(
+                        "WhatsApp Link",
+                        display_text="📱 Chat"
+                    )
+                }
+            )
+        
+        st.divider()
+        st.subheader("Save & Publish Event")
+        
+        col_save, col_complete = st.columns([1, 1])
+        
+        with col_save:
+            if st.button("💾 Save Event & Publish", type="primary"):
+                event_id = f"EVT_{len(st.session_state.active_events) + 1:03d}"
+                st.session_state.active_events[event_id] = {
+                    'name': event_name,
+                    'date': event_date,
+                    'neighborhood': sel_nbhd,
+                    'target_count': target_count,
+                    'required_skills': req_skills,
+                    'vehicle_required': req_vehicle,
+                    'assigned_volunteers': found,
+                    'plan': ai_out,
+                    'created_at': datetime.now().isoformat()
+                }
+                st.success(f"✅ Event saved and published! Event ID: {event_id}")
+                st.rerun()
+        
+        with col_complete:
+            if st.session_state.active_events:
+                event_to_close = st.selectbox(
+                    "Select an active event to close:",
+                    list(st.session_state.active_events.keys())
+                )
+                if st.button("✓ Close/Complete Event"):
+                    event_data = st.session_state.active_events.pop(event_to_close)
+                    completed_event = {
+                        'event_id': event_to_close,
+                        **event_data,
+                        'completed_at': datetime.now().isoformat(),
+                        'attendees': event_data['assigned_volunteers']
+                    }
+                    st.session_state.event_history.append(completed_event)
+                    st.success(f"✅ Event {event_to_close} completed and archived!")
+                    st.rerun()
+        
+        st.divider()
+        st.subheader("Active & Historical Events")
+        
+        if st.session_state.active_events:
+            st.write("**🔴 Active Events:**")
+            for evt_id, evt_data in st.session_state.active_events.items():
+                st.caption(f"**{evt_id}:** {evt_data['name']} - {evt_data['neighborhood']} - {evt_data['assigned_volunteers'].__len__()} volunteers")
 
 # ════════════════════════════════════════════════════════════════════════════
 #  03 · CAREER GROWTH HUB
@@ -555,3 +678,232 @@ STRICT RULES:
             report = call_ai("Write a professional NGO Workforce Status Report based on the provided data.", SYSTEM, model=MODEL_LARGE)
             st.subheader("Workforce Status Report")
             st.markdown(report)
+
+# ════════════════════════════════════════════════════════════════════════════
+#  06 · EVENT TRANSPARENCY (Admin Only)
+# ════════════════════════════════════════════════════════════════════════════
+elif page == "Event Transparency" and user_role == "Admin":
+    st.title("📊 Event Transparency Dashboard")
+    st.write("Track all active and historical events with volunteer participation metrics.")
+    
+    t1, t2, t3 = st.tabs(["Active Events", "Event History", "Participation Analytics"])
+    
+    with t1:
+        st.subheader("🔴 Currently Active Events")
+        if st.session_state.active_events:
+            for evt_id, evt_data in st.session_state.active_events.items():
+                with st.expander(f"{evt_id}: {evt_data['name']} - {evt_data['neighborhood']}", expanded=False):
+                    col1, col2, col3, col4 = st.columns(4)
+                    col1.metric("Date", evt_data['date'])
+                    col2.metric("Target", evt_data['target_count'])
+                    col3.metric("Assigned", len(evt_data['assigned_volunteers']))
+                    col4.metric("Skills Needed", evt_data['required_skills'][:25] + "..." if len(evt_data['required_skills']) > 25 else evt_data['required_skills'])
+                    st.markdown("**Assigned Volunteers:**")
+                    assigned_details = df[df['Volunteer_ID'].isin(evt_data['assigned_volunteers'])][['Volunteer_ID', 'Full_Name', 'Type', 'Event_Count', 'Attendance_Rate']]
+                    st.dataframe(assigned_details, use_container_width=True, hide_index=True)
+        else:
+            st.info("No active events. Create one in the Event Deployment page.")
+    
+    with t2:
+        st.subheader("✅ Event History & Completion Records")
+        if st.session_state.event_history:
+            for idx, event_rec in enumerate(st.session_state.event_history):
+                with st.expander(f"{event_rec['event_id']}: {event_rec['name']} - Completed {event_rec['completed_at'][:10]}", expanded=False):
+                    col1, col2, col3, col4 = st.columns(4)
+                    col1.metric("Neighborhood", event_rec['neighborhood'])
+                    col2.metric("Target", event_rec['target_count'])
+                    col3.metric("Attended", len(event_rec['attendees']))
+                    col4.metric("Attendance %", f"{(len(event_rec['attendees']) / event_rec['target_count'] * 100):.0f}%" if event_rec['target_count'] > 0 else "N/A")
+                    st.markdown("**Attendee Details:**")
+                    attendee_details = df[df['Volunteer_ID'].isin(event_rec['attendees'])][['Volunteer_ID', 'Full_Name', 'Type', 'Attendance_Rate']]
+                    st.dataframe(attendee_details, use_container_width=True, hide_index=True)
+        else:
+            st.info("No completed events yet.")
+    
+    with t3:
+        st.subheader("📈 Participation & Fairness Analytics")
+        
+        if st.session_state.event_history:
+            # Participation counts
+            participation = {}
+            for event_rec in st.session_state.event_history:
+                for vol_id in event_rec['attendees']:
+                    participation[vol_id] = participation.get(vol_id, 0) + 1
+            
+            part_df = pd.DataFrame(list(participation.items()), columns=['Volunteer_ID', 'Events_Attended'])
+            part_df = part_df.merge(df[['Volunteer_ID', 'Full_Name', 'Type']], on='Volunteer_ID')
+            part_df = part_df.sort_values('Events_Attended', ascending=False)
+            
+            col_a, col_b = st.columns(2)
+            
+            with col_a:
+                st.metric("Total Events Completed", len(st.session_state.event_history))
+                st.metric("Volunteers Engaged", len(participation))
+                avg_participation = part_df['Events_Attended'].mean()
+                st.metric("Avg Events per Volunteer", f"{avg_participation:.1f}")
+            
+            with col_b:
+                fig_part = px.bar(part_df.head(15), x='Full_Name', y='Events_Attended', color='Type', 
+                                 color_discrete_map={'Volunteer': '#58a6ff', 'Intern': '#f5b041'})
+                fig_part.update_layout(title='Top Participants', xaxis_title='', yaxis_title='Events Attended', 
+                                      margin=dict(t=30, b=0, l=0, r=0), height=350)
+                st.plotly_chart(fig_part, use_container_width=True)
+            
+            st.subheader("Participation Summary")
+            st.dataframe(part_df, use_container_width=True, hide_index=True, height=400)
+        else:
+            st.info("No participation data yet. Complete events to see analytics.")
+
+# ════════════════════════════════════════════════════════════════════════════
+#  07 · VOLUNTEER VIEW (Volunteers Only)
+# ════════════════════════════════════════════════════════════════════════════
+elif page == "Volunteer View" and user_role == "Volunteer":
+    st.title("🙋 Volunteer Portal")
+    st.write("Your personalized volunteer dashboard with event opportunities and growth paths.")
+    
+    # Simulate login as specific volunteer
+    st.subheader("👤 Login as Volunteer")
+    logged_in_volunteer = st.selectbox(
+        "Select your name:",
+        sorted(df['Full_Name'].unique().tolist()),
+        key="volunteer_login"
+    )
+    
+    if logged_in_volunteer:
+        vol_record = df[df['Full_Name'] == logged_in_volunteer].iloc[0]
+        
+        vt1, vt2, vt3 = st.tabs(["📋 My Profile & History", "📅 Open Events", "🎓 Cross-Skill & Shadowing"])
+        
+        with vt1:
+            st.subheader(f"Profile: {logged_in_volunteer}")
+            
+            col_p1, col_p2 = st.columns(2)
+            
+            with col_p1:
+                st.markdown("**Basic Information**")
+                st.write(f"**ID:** {vol_record['Volunteer_ID']}")
+                st.write(f"**Type:** {vol_record['Type']}")
+                st.write(f"**Neighborhood:** {vol_record['Neighborhood']}")
+                st.write(f"**Phone:** {vol_record['Phone_Number']}")
+                st.write(f"**Email:** {vol_record['Email']}")
+            
+            with col_p2:
+                st.markdown("**Performance Metrics**")
+                st.metric("Attendance Rate", vol_record['Attendance_Rate'])
+                st.metric("Events Attended", vol_record['Event_Count'])
+                st.metric("Has Vehicle", "✅ Yes" if vol_record['Has_Vehicle'] == 'Yes' else "❌ No")
+                st.metric("Preferred Days", vol_record['Preferred_Days'])
+            
+            st.divider()
+            st.markdown("**Current Skills**")
+            skills_list = [s.strip() for s in str(vol_record['Skills']).split(';') if s.strip()]
+            for skill in skills_list:
+                st.badge(skill, text_color="white")
+            
+            st.markdown("**Interests**")
+            interests_list = [i.strip() for i in str(vol_record['Interests']).split(';') if i.strip()]
+            for interest in interests_list:
+                st.badge(interest, text_color="white")
+            
+            st.divider()
+            st.markdown("**📊 Event History**")
+            
+            # Get events this volunteer attended
+            attended_events = []
+            for event_rec in st.session_state.event_history:
+                if vol_record['Volunteer_ID'] in event_rec['attendees']:
+                    attended_events.append({
+                        'Event ID': event_rec['event_id'],
+                        'Event Name': event_rec['name'],
+                        'Date': event_rec['completed_at'][:10],
+                        'Neighborhood': event_rec['neighborhood'],
+                        'Role': 'Participant'
+                    })
+            
+            if attended_events:
+                st.dataframe(pd.DataFrame(attended_events), use_container_width=True, hide_index=True, height=250)
+            else:
+                st.info("No completed events yet. Check Open Events to join upcoming opportunities!")
+        
+        with vt2:
+            st.subheader("📅 Available Event Opportunities")
+            
+            if st.session_state.active_events:
+                for evt_id, evt_data in st.session_state.active_events.items():
+                    is_assigned = vol_record['Volunteer_ID'] in evt_data['assigned_volunteers']
+                    
+                    col_e1, col_e2 = st.columns([4, 1])
+                    
+                    with col_e1:
+                        status_badge = "✅ You're Assigned!" if is_assigned else "🟡 Open"
+                        st.markdown(f"### {evt_data['name']} {status_badge}")
+                        st.write(f"**When:** {evt_data['date']}")
+                        st.write(f"**Where:** {evt_data['neighborhood']}")
+                        st.write(f"**Skills Needed:** {evt_data['required_skills']}")
+                    
+                    with col_e2:
+                        if is_assigned:
+                            st.success("Assigned")
+                        else:
+                            st.info("Available")
+                    
+                    st.divider()
+            else:
+                st.info("No open events at this time. Check back soon!")
+        
+        with vt3:
+            st.subheader("🎓 Cross-Skill Development & Peer Learning")
+            st.write("Learn new skills by shadowing experts or teaching others.")
+            
+            learning_skill = st.text_input(
+                "What skill would you like to learn?",
+                placeholder="e.g., Java, Data Analysis, Project Management",
+                key="learning_skill_input"
+            )
+            
+            if learning_skill and st.button("🔍 Find Peer Learning Matches", type="primary"):
+                with st.spinner("Finding experts to learn from..."):
+                    
+                    # Find volunteers with the skill
+                    experts = []
+                    for _, expert in df.iterrows():
+                        if learning_skill.lower() in str(expert['Skills']).lower():
+                            if expert['Volunteer_ID'] != vol_record['Volunteer_ID']:
+                                experts.append(expert)
+                    
+                    if experts:
+                        st.success(f"✅ Found {len(experts)} potential expert(s) to learn from!")
+                        
+                        for expert in experts[:5]:  # Show top 5
+                            with st.expander(f"👨‍🏫 {expert['Full_Name']} - Events Attended: {expert['Event_Count']}", expanded=False):
+                                st.write(f"**Neighborhood:** {expert['Neighborhood']}")
+                                st.write(f"**Expertise:** {expert['Skills']}")
+                                st.write(f"**Availability:** {expert['Preferred_Days']}")
+                                st.write(f"**Experience Level:** {'Expert (High Participation)' if expert['Event_Count'] >= 5 else 'Experienced' if expert['Event_Count'] >= 3 else 'Intermediate'}")
+                                
+                                if st.button(f"Request Shadow Role with {expert['Full_Name']}", key=f"shadow_{expert['Volunteer_ID']}"):
+                                    st.success(f"✅ Shadow request sent! Admin will pair you for the next event.")
+                        
+                        st.divider()
+                        st.markdown("**💡 How Shadowing Works:**")
+                        st.markdown("""
+                        1. **Match:** We pair you with an expert in your desired skill
+                        2. **Event Assignment:** You'll both be assigned to the same event
+                        3. **Learn:** Work alongside the expert during the event
+                        4. **Feedback:** Get personalized insights to accelerate your growth
+                        """)
+                    else:
+                        st.warning(f"❌ No experts found for '{learning_skill}' yet. Try another skill or check back later!")
+            
+            st.divider()
+            st.markdown("**📚 Popular Skills to Learn:**")
+            all_skills = set()
+            for skills_str in df['Skills'].dropna():
+                all_skills.update([s.strip() for s in str(skills_str).split(';')])
+            
+            skill_cols = st.columns(4)
+            for idx, skill in enumerate(sorted(all_skills)[:12]):
+                with skill_cols[idx % 4]:
+                    if st.button(skill, key=f"skill_{skill}"):
+                        st.session_state.learning_skill_input = skill
+                        st.rerun()
