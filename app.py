@@ -23,6 +23,11 @@ if "event_history" not in st.session_state:
     st.session_state.event_history = []
 if "cop_msgs" not in st.session_state:
     st.session_state.cop_msgs = []
+# Added to fix nested button state:
+if "draft_plan" not in st.session_state:
+    st.session_state.draft_plan = None
+if "draft_vols" not in st.session_state:
+    st.session_state.draft_vols = []
 
 # ─── NEIGHBORHOOD COORDS (Delhi) ─────────────────────────────────────────────
 NBHD_COORDS = {
@@ -253,8 +258,7 @@ elif page == "Event Deployment":
     st.title("Event Deployment Planning")
     st.write("Plan an event, set requirements, and generate a recommended deployment manifest.")
     
-    # Debug: Show active events count
-    st.info(f"📊 Session State: {len(st.session_state.active_events)} active events | {len(st.session_state.event_history)} completed events")
+    st.info(f"📊 Tracking: {len(st.session_state.active_events)} active events | {len(st.session_state.event_history)} completed events")
 
     c_left, c_right = st.columns([1, 2], gap="large")
 
@@ -267,7 +271,6 @@ elif page == "Event Deployment":
         req_skills   = st.text_input("Required Skills", "First Aid, CPR")
         req_vehicle  = st.checkbox("Vehicle Required")
 
-        # Now pulls from df instead of limited volunteers_df
         local_pool    = df if sel_nbhd == "All Regions" else df[df['Neighborhood'] == sel_nbhd].copy()
         local_avg     = local_pool['Att_Float'].mean() if len(local_pool) > 0 else 0.60
         buffer_target = int(target_count / local_avg) + 1 if local_avg > 0 else target_count * 2
@@ -282,6 +285,56 @@ elif page == "Event Deployment":
             st.warning(f"Available pool is insufficient. You may need to pull from other regions.")
         else:
             st.success(f"Pool sufficient to cover expected attendance drop-offs.")
+            
+        if st.button("Generate Deployment Plan", type="primary"):
+            with st.spinner("Analyzing pool and building deployment plan..."):
+                safe = local_pool[['Volunteer_ID','Full_Name','Skills','Has_Vehicle','Attendance_Rate','Preferred_Days','Neighborhood','Event_Count']].copy()
+                ai_out = call_ai(f"""
+    EVENT: {event_name} | DATE: {event_date} | REGION: {sel_nbhd}
+    TARGET: {target_count} | BUFFER TARGET: {buffer_target} (local avg {local_avg:.0%})
+    REQUIRED SKILLS: {req_skills} | VEHICLE: {req_vehicle}
+
+    POOL (no PII):
+    {safe.to_csv(index=False)}
+
+    FAIRNESS & FUZZY MATCHING RULES:
+    1. FUZZY SKILL MATCHING: If event requires "{req_skills}", accept volunteers with RELATED skills. 
+       For example: "10th Grade Math" → person with "Engineering" or "Teaching" is eligible (skills transfer).
+       "Web Development" → accept "Full-Stack", "Frontend", "Backend", "JavaScript", "Python" experts.
+       Explain the skill match rationale.
+
+    2. FAIRNESS CONSTRAINT: Volunteers with lower Event_Count should be prioritized to prevent burnout and ensure fairness.
+       For example: If person A has Event_Count=10 and person B has Event_Count=2, both equally skilled, pick person B.
+       This ensures equitable participation across your team.
+
+    3. LEARNER-EXPERT PAIRING: Try to pair one or two "Learners" with "Experts" for this event. 
+       A Learner is someone volunteering for the first time or with low event count (< 3).
+       An Expert is someone with high event count (> 5) or strong skills match.
+
+    OUTPUT - use these exact section headers:
+
+    ## DEPLOYMENT MANIFEST
+    List exactly {buffer_target} Volunteer IDs. Prioritize Volunteers over Interns. Include rationale (2 sentences).
+
+    ## ROLE ASSIGNMENT
+    Markdown table: Volunteer_ID | Full_Name | Event Task | Role | Reason
+    Note: Mark SHADOW roles for learners paired with experts.
+
+    ## COMMUNICATION DRAFT
+    Ready-to-send broadcast message. Max 150 words. Include: event, date, task, report time, what to bring.
+
+    ## FAIRNESS & SKILL MATCH NOTES
+    Explain fuzzy matches and fairness decisions. Which volunteers were paired as Learner-Expert?
+
+    ## RISK FLAGS
+    Gaps, insufficient pool warnings, cross-region recommendations.
+    """, "You are a professional NGO coordinator planning an event deployment with a commitment to fairness and skill development.", model=MODEL_LARGE)
+
+                found = list(set(re.findall(r'V-\d{3}', ai_out)))
+                # Store the AI output and found IDs in session state so they survive the next button click
+                st.session_state.draft_plan = ai_out
+                st.session_state.draft_vols = found
+                st.rerun()
 
     with c_right:
         st.subheader("Volunteer Map & Regional Insights")
@@ -327,126 +380,65 @@ elif page == "Event Deployment":
             use_container_width=True, hide_index=True, height=250
         )
 
-    st.divider()
-
-    if st.button("Generate Deployment Plan", type="primary"):
-        with st.spinner("Analyzing pool and building deployment plan..."):
-            safe = local_pool[['Volunteer_ID','Full_Name','Skills','Has_Vehicle','Attendance_Rate','Preferred_Days','Neighborhood','Event_Count']].copy()
-            ai_out = call_ai(f"""
-EVENT: {event_name} | DATE: {event_date} | REGION: {sel_nbhd}
-TARGET: {target_count} | BUFFER TARGET: {buffer_target} (local avg {local_avg:.0%})
-REQUIRED SKILLS: {req_skills} | VEHICLE: {req_vehicle}
-
-POOL (no PII):
-{safe.to_csv(index=False)}
-
-FAIRNESS & FUZZY MATCHING RULES:
-1. FUZZY SKILL MATCHING: If event requires "{req_skills}", accept volunteers with RELATED skills. 
-   For example: "10th Grade Math" → person with "Engineering" or "Teaching" is eligible (skills transfer).
-   "Web Development" → accept "Full-Stack", "Frontend", "Backend", "JavaScript", "Python" experts.
-   Explain the skill match rationale.
-
-2. FAIRNESS CONSTRAINT: Volunteers with lower Event_Count should be prioritized to prevent burnout and ensure fairness.
-   For example: If person A has Event_Count=10 and person B has Event_Count=2, both equally skilled, pick person B.
-   This ensures equitable participation across your team.
-
-3. LEARNER-EXPERT PAIRING: Try to pair one or two "Learners" with "Experts" for this event. 
-   A Learner is someone volunteering for the first time or with low event count (< 3).
-   An Expert is someone with high event count (> 5) or strong skills match.
-
-OUTPUT - use these exact section headers:
-
-## DEPLOYMENT MANIFEST
-List exactly {buffer_target} Volunteer IDs. Prioritize Volunteers over Interns. Include rationale (2 sentences).
-
-## ROLE ASSIGNMENT
-Markdown table: Volunteer_ID | Full_Name | Event Task | Role | Reason
-Note: Mark SHADOW roles for learners paired with experts.
-
-## COMMUNICATION DRAFT
-Ready-to-send broadcast message. Max 150 words. Include: event, date, task, report time, what to bring.
-
-## FAIRNESS & SKILL MATCH NOTES
-Explain fuzzy matches and fairness decisions. Which volunteers were paired as Learner-Expert?
-
-## RISK FLAGS
-Gaps, insufficient pool warnings, cross-region recommendations.
-""", "You are a professional NGO coordinator planning an event deployment with a commitment to fairness and skill development.", model=MODEL_LARGE)
-
-        st.info("AI Deployment Plan Generated")
-        st.markdown(ai_out)
+    # ─── DEPLOYMENT DRAFT RENDERER (Safe from button resets) ───
+    if st.session_state.draft_plan:
+        st.divider()
+        st.info("AI Deployment Plan Generated - Please review and adjust the roster below before saving.")
+        st.markdown(st.session_state.draft_plan)
 
         st.subheader("Contact List for Assigned Volunteers")
-        # Extract volunteer IDs from AI output (try multiple patterns)
-        found = list(set(re.findall(r'V-\d{3}', ai_out)))
         
-        st.write(f"🔍 **ID Extraction Debug:** Found {len(found)} volunteer IDs from AI output")
-        
-        # Fallback: if no matches, try to get top volunteers from pool
-        if not found:
-            st.warning("⚠️ Could not extract specific volunteer IDs from AI output. Please select volunteers manually below.")
+        # User can manually edit the selected volunteers
+        default_selections = st.session_state.draft_vols
+        if not default_selections:
+            st.warning("⚠️ Could not extract specific volunteer IDs from AI output. Please select manually:")
+            default_selections = local_pool['Volunteer_ID'].head(target_count).tolist()
             
-            # Manual selection interface
-            st.markdown("**Select volunteers for this event:**")
-            selected_volunteers = st.multiselect(
-                "Choose volunteers:",
-                options=local_pool['Volunteer_ID'].tolist(),
-                default=local_pool['Volunteer_ID'].head(min(target_count * 2, len(local_pool))).tolist(),
-                format_func=lambda vid: f"{vid} - {local_pool[local_pool['Volunteer_ID']==vid]['Full_Name'].values[0] if len(local_pool[local_pool['Volunteer_ID']==vid]) > 0 else 'Unknown'}",
-                key="manual_volunteer_select"
+        selected_vols = st.multiselect(
+            "Final Volunteer Roster:",
+            options=local_pool['Volunteer_ID'].tolist(),
+            default=default_selections,
+            format_func=lambda vid: f"{vid} - {local_pool[local_pool['Volunteer_ID']==vid]['Full_Name'].values[0] if len(local_pool[local_pool['Volunteer_ID']==vid]) > 0 else 'Unknown'}",
+            key="final_vol_select"
+        )
+        
+        if selected_vols:
+            contacts = df[df['Volunteer_ID'].isin(selected_vols)][['Volunteer_ID','Full_Name','Type','Phone_Number','Email','Skills','Has_Vehicle','Neighborhood']].copy()
+            
+            # ═══ ADD WHATSAPP LINKS ═══
+            def generate_whatsapp_link(row):
+                try:
+                    phone = str(row['Phone_Number']).replace('+', '').replace('-', '').replace(' ', '').replace('(', '').replace(')', '')
+                    if not phone.startswith('+'):
+                        phone = '+91' + phone if len(phone) == 10 else '+' + phone
+                    else:
+                        phone = '+' + phone.lstrip('+')
+                    
+                    message = f"Hi {row['Full_Name']}, you have been selected for {event_name} on {event_date}. Please confirm your availability. Thank you!"
+                    return f"https://wa.me/{phone}?text={message.replace(' ', '%20')}"
+                except:
+                    return ""
+            
+            contacts['WhatsApp_Link'] = contacts.apply(generate_whatsapp_link, axis=1)
+            
+            st.dataframe(
+                contacts,
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "WhatsApp_Link": st.column_config.LinkColumn("WhatsApp Link", display_text="📱 Chat")
+                }
             )
-            found = selected_volunteers
         
-        if found:
-            st.success(f"✅ {len(found)} volunteers selected for deployment")
-            contacts = df[df['Volunteer_ID'].isin(found)][['Volunteer_ID','Full_Name','Type','Phone_Number','Email','Skills','Has_Vehicle','Neighborhood']].copy()
-            
-            if len(contacts) > 0:
-                # ═══ ADD WHATSAPP LINKS ═══
-                def generate_whatsapp_link(row):
-                    try:
-                        phone = str(row['Phone_Number']).replace('+', '').replace('-', '').replace(' ', '').replace('(', '').replace(')', '')
-                        if not phone.startswith('+'):
-                            phone = '+91' + phone if len(phone) == 10 else '+' + phone
-                        else:
-                            phone = '+' + phone.lstrip('+')
-                        
-                        message = f"Hi {row['Full_Name']}, you have been selected for {event_name} on {event_date}. Please confirm your availability. Thank you!"
-                        whatsapp_url = f"https://wa.me/{phone}?text={message.replace(' ', '%20')}"
-                        return whatsapp_url
-                    except:
-                        return ""
-                
-                contacts['WhatsApp_Link'] = contacts.apply(generate_whatsapp_link, axis=1)
-                
-                # Display with clickable WhatsApp links
-                st.dataframe(
-                    contacts,
-                    use_container_width=True,
-                    hide_index=True,
-                    column_config={
-                        "WhatsApp_Link": st.column_config.LinkColumn(
-                            "WhatsApp Link",
-                            display_text="📱 Chat"
-                        )
-                    }
-                )
-            else:
-                st.error("❌ Selected volunteers not found in database")
-                found = []
-        else:
-            st.error("❌ No volunteers selected. Please select at least one volunteer above.")
+        st.write("")
+        c_save1, c_save2 = st.columns([1, 5])
         
-        st.divider()
-        st.subheader("💾 Save & Publish Event")
-        
-        # Only show save button if we have volunteers
-        if found and len(found) > 0:
-            col_save, col_complete = st.columns([1, 1])
-            
-            with col_save:
-                if st.button("Save Event & Publish", type="primary", key="save_event_btn"):
-                    event_id = f"EVT_{len(st.session_state.active_events) + 1:03d}"
+        with c_save1:
+            if st.button("💾 Save & Publish", type="primary"):
+                if not selected_vols:
+                    st.error("Please select at least one volunteer.")
+                else:
+                    event_id = f"EVT_{(len(st.session_state.active_events) + len(st.session_state.event_history) + 1):03d}"
                     st.session_state.active_events[event_id] = {
                         'name': event_name,
                         'date': event_date,
@@ -454,42 +446,48 @@ Gaps, insufficient pool warnings, cross-region recommendations.
                         'target_count': target_count,
                         'required_skills': req_skills,
                         'vehicle_required': req_vehicle,
-                        'assigned_volunteers': found,
-                        'plan': ai_out,
+                        'assigned_volunteers': selected_vols,
+                        'plan': st.session_state.draft_plan,
                         'created_at': datetime.now().isoformat()
                     }
-                    st.success(f"✅ Event saved and published! Event ID: {event_id}")
-                    st.info(f"📊 Event details stored. Active events: {len(st.session_state.active_events)}")
+                    st.session_state.draft_plan = None
+                    st.session_state.draft_vols = []
+                    st.success(f"✅ Event {event_id} successfully saved!")
                     st.balloons()
-            
-            with col_complete:
-                if st.session_state.active_events:
-                    event_to_close = st.selectbox(
-                        "Select an active event to close:",
-                        list(st.session_state.active_events.keys()),
-                        key="close_event_select"
-                    )
-                    if st.button("Close/Complete Event", key="close_event_btn"):
-                        event_data = st.session_state.active_events.pop(event_to_close)
-                        completed_event = {
-                            'event_id': event_to_close,
-                            **event_data,
-                            'completed_at': datetime.now().isoformat(),
-                            'attendees': event_data['assigned_volunteers']
-                        }
-                        st.session_state.event_history.append(completed_event)
-                        st.success(f"✅ Event {event_to_close} completed and archived!")
-                        st.rerun()
-        else:
-            st.warning("⚠️ Please select volunteers above before saving the event.")
-        
-        st.divider()
-        st.subheader("Active & Historical Events Summary")
-        
-        if st.session_state.active_events:
-            st.write("**🔴 Active Events:**")
+                    st.rerun()
+                    
+        with c_save2:
+            if st.button("❌ Cancel Draft"):
+                st.session_state.draft_plan = None
+                st.session_state.draft_vols = []
+                st.rerun()
+
+    # ─── MANAGE ACTIVE EVENTS ───
+    st.divider()
+    st.subheader("📋 Manage Active Events")
+    
+    if st.session_state.active_events:
+        c_active1, c_active2 = st.columns([2, 1])
+        with c_active1:
             for evt_id, evt_data in st.session_state.active_events.items():
-                st.caption(f"**{evt_id}:** {evt_data['name']} - {evt_data['neighborhood']} - {len(evt_data['assigned_volunteers'])} volunteers")
+                st.markdown(f"**{evt_id}: {evt_data['name']}** - {evt_data['neighborhood']} ({len(evt_data['assigned_volunteers'])} assigned)")
+                
+        with c_active2:
+            event_to_close = st.selectbox("Select event to close/complete:", list(st.session_state.active_events.keys()))
+            if st.button("✅ Mark as Completed", type="secondary"):
+                event_data = st.session_state.active_events.pop(event_to_close)
+                completed_event = {
+                    'event_id': event_to_close,
+                    **event_data,
+                    'completed_at': datetime.now().isoformat(),
+                    'attendees': event_data['assigned_volunteers']
+                }
+                st.session_state.event_history.append(completed_event)
+                st.success(f"Event {event_to_close} moved to history!")
+                st.rerun()
+    else:
+        st.info("No active events. Generate and save an event plan above.")
+
 
 # ════════════════════════════════════════════════════════════════════════════
 #  03 · CAREER GROWTH HUB
@@ -720,45 +718,7 @@ elif page == "Event Transparency":
     st.title("📊 Event Transparency Dashboard")
     st.write("Track all active and historical events with volunteer participation metrics.")
     
-    # Debug display - show session state status
-    with st.expander("🔍 Session Debug Info", expanded=False):
-        st.write(f"**Active Events Count:** {len(st.session_state.active_events)}")
-        st.write(f"**Completed Events Count:** {len(st.session_state.event_history)}")
-        if st.session_state.active_events:
-            st.write("**Active Event IDs:**")
-            for evt_id in st.session_state.active_events.keys():
-                st.write(f"  - {evt_id}")
-        if st.session_state.event_history:
-            st.write("**Completed Event IDs:**")
-            for evt in st.session_state.event_history:
-                st.write(f"  - {evt['event_id']}")
-    
     st.info(f"📊 Current Session: {len(st.session_state.active_events)} active | {len(st.session_state.event_history)} completed")
-    
-    # Test event creator (for debugging)
-    with st.expander("➕ Create Test Event (Debugging)"):
-        test_col1, test_col2 = st.columns(2)
-        with test_col1:
-            test_event_name = st.text_input("Test Event Name", value="Test Medical Camp", key="test_event_name")
-        with test_col2:
-            test_volunteers = st.number_input("Number of volunteers", min_value=1, value=5, key="test_volunteers")
-        
-        if st.button("Create Test Event", key="test_create_btn"):
-            test_event_id = f"EVT_{len(st.session_state.active_events) + 1:03d}"
-            test_selected_vols = df['Volunteer_ID'].head(test_volunteers).tolist()
-            st.session_state.active_events[test_event_id] = {
-                'name': test_event_name,
-                'date': 'Test Date',
-                'neighborhood': 'Paschim Vihar',
-                'target_count': test_volunteers,
-                'required_skills': 'Test Skills',
-                'vehicle_required': False,
-                'assigned_volunteers': test_selected_vols,
-                'plan': 'Test Plan',
-                'created_at': datetime.now().isoformat()
-            }
-            st.success(f"✅ Test event {test_event_id} created with {len(test_selected_vols)} volunteers!")
-            st.rerun()
     
     t1, t2, t3 = st.tabs(["Active Events", "Event History", "Participation Analytics"])
     
@@ -784,7 +744,7 @@ elif page == "Event Transparency":
     with t2:
         st.subheader("✅ Event History & Completion Records")
         if st.session_state.event_history:
-            for idx, event_rec in enumerate(st.session_state.event_history):
+            for idx, event_rec in enumerate(reversed(st.session_state.event_history)):
                 with st.expander(f"{event_rec['event_id']}: {event_rec['name']} - Completed {event_rec['completed_at'][:10]}", expanded=False):
                     col1, col2, col3, col4 = st.columns(4)
                     col1.metric("Neighborhood", event_rec['neighborhood'])
