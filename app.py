@@ -23,11 +23,19 @@ if "event_history" not in st.session_state:
     st.session_state.event_history = []
 if "cop_msgs" not in st.session_state:
     st.session_state.cop_msgs = []
-# Added to fix nested button state:
 if "draft_plan" not in st.session_state:
     st.session_state.draft_plan = None
 if "draft_vols" not in st.session_state:
     st.session_state.draft_vols = []
+# New Session States for Shadowing & Cross-skilling
+if "shadow_requests" not in st.session_state:
+    st.session_state.shadow_requests = []
+if "learning_skill_input" not in st.session_state:
+    st.session_state.learning_skill_input = ""
+
+def set_learning_skill(skill):
+    """Callback to safely set text input value without throwing API exceptions"""
+    st.session_state.learning_skill_input = skill
 
 # ─── NEIGHBORHOOD COORDS (Delhi) ─────────────────────────────────────────────
 NBHD_COORDS = {
@@ -103,6 +111,18 @@ def parse_skills(series):
     for v in series.dropna():
         out.extend([s.strip() for s in str(v).split(';') if s.strip()])
     return out
+
+def generate_whatsapp_link(phone_number, message=""):
+    """Helper to consistently generate WhatsApp links across the app"""
+    try:
+        phone = str(phone_number).replace('+', '').replace('-', '').replace(' ', '').replace('(', '').replace(')', '')
+        if not phone.startswith('+'):
+            phone = '+91' + phone if len(phone) == 10 else '+' + phone
+        else:
+            phone = '+' + phone.lstrip('+')
+        return f"https://wa.me/{phone}?text={message.replace(' ', '%20')}"
+    except:
+        return ""
 
 
 # ─── SIDEBAR ──────────────────────────────────────────────────────────────────
@@ -260,6 +280,15 @@ elif page == "Event Deployment":
     
     st.info(f"📊 Tracking: {len(st.session_state.active_events)} active events | {len(st.session_state.event_history)} completed events")
 
+    # Display Pending Shadow Requests so Admin is aware
+    pending_shadows = [req for req in st.session_state.shadow_requests if req['status'] == 'Pending']
+    if pending_shadows:
+        with st.expander("🔔 Pending Shadow/Cross-Skill Requests (AI will try to pair them)", expanded=True):
+            st.write("These volunteers requested to learn from experts. If they fit this event, the AI will prioritize assigning them together.")
+            shadow_df = pd.DataFrame(pending_shadows)[['learner_name', 'expert_name', 'skill', 'status']]
+            shadow_df.columns = ["Learner", "Expert Requested", "Skill to Learn", "Status"]
+            st.dataframe(shadow_df, use_container_width=True, hide_index=True)
+
     c_left, c_right = st.columns([1, 2], gap="large")
 
     with c_left:
@@ -289,6 +318,11 @@ elif page == "Event Deployment":
         if st.button("Generate Deployment Plan", type="primary"):
             with st.spinner("Analyzing pool and building deployment plan..."):
                 safe = local_pool[['Volunteer_ID','Full_Name','Skills','Has_Vehicle','Attendance_Rate','Preferred_Days','Neighborhood','Event_Count']].copy()
+                
+                shadow_context = "None at the moment."
+                if pending_shadows:
+                    shadow_context = "\n".join([f"- Learner: {s['learner_name']} ({s['learner_id']}) wants to shadow Expert: {s['expert_name']} ({s['expert_id']}) for skill: {s['skill']}" for s in pending_shadows])
+
                 ai_out = call_ai(f"""
     EVENT: {event_name} | DATE: {event_date} | REGION: {sel_nbhd}
     TARGET: {target_count} | BUFFER TARGET: {buffer_target} (local avg {local_avg:.0%})
@@ -297,37 +331,33 @@ elif page == "Event Deployment":
     POOL (no PII):
     {safe.to_csv(index=False)}
 
+    PENDING SHADOW REQUESTS:
+    {shadow_context}
+
     FAIRNESS & FUZZY MATCHING RULES:
     1. FUZZY SKILL MATCHING: If event requires "{req_skills}", accept volunteers with RELATED skills. 
        For example: "10th Grade Math" → person with "Engineering" or "Teaching" is eligible (skills transfer).
-       "Web Development" → accept "Full-Stack", "Frontend", "Backend", "JavaScript", "Python" experts.
        Explain the skill match rationale.
-
     2. FAIRNESS CONSTRAINT: Volunteers with lower Event_Count should be prioritized to prevent burnout and ensure fairness.
-       For example: If person A has Event_Count=10 and person B has Event_Count=2, both equally skilled, pick person B.
-       This ensures equitable participation across your team.
-
-    3. LEARNER-EXPERT PAIRING: Try to pair one or two "Learners" with "Experts" for this event. 
-       A Learner is someone volunteering for the first time or with low event count (< 3).
-       An Expert is someone with high event count (> 5) or strong skills match.
+    3. LEARNER-EXPERT PAIRING: If there are Pending Shadow Requests listed above, TRY TO INCLUDE THE PAIR in this deployment if they are available in the pool. Assign the learner as a "Shadow" role.
 
     OUTPUT - use these exact section headers:
 
     ## DEPLOYMENT MANIFEST
-    List exactly {buffer_target} Volunteer IDs. Prioritize Volunteers over Interns. Include rationale (2 sentences).
+    List exactly {buffer_target} Volunteer IDs. Include rationale (2 sentences).
 
     ## ROLE ASSIGNMENT
     Markdown table: Volunteer_ID | Full_Name | Event Task | Role | Reason
     Note: Mark SHADOW roles for learners paired with experts.
 
     ## COMMUNICATION DRAFT
-    Ready-to-send broadcast message. Max 150 words. Include: event, date, task, report time, what to bring.
+    Ready-to-send broadcast message. Max 150 words.
 
     ## FAIRNESS & SKILL MATCH NOTES
-    Explain fuzzy matches and fairness decisions. Which volunteers were paired as Learner-Expert?
+    Explain fuzzy matches, fairness decisions, and shadowing pairings.
 
     ## RISK FLAGS
-    Gaps, insufficient pool warnings, cross-region recommendations.
+    Gaps, insufficient pool warnings.
     """, "You are a professional NGO coordinator planning an event deployment with a commitment to fairness and skill development.", model=MODEL_LARGE)
 
                 found = list(set(re.findall(r'V-\d{3}', ai_out)))
@@ -376,7 +406,7 @@ elif page == "Event Deployment":
 
         st.subheader(f"Available Pool - {sel_nbhd}")
         st.dataframe(
-            local_pool[['Volunteer_ID','Full_Name','Type','Skills','Attendance_Rate','Preferred_Days']],
+            local_pool[['Volunteer_ID','Full_Name','Type','Skills','Attendance_Rate','Event_Count']],
             use_container_width=True, hide_index=True, height=250
         )
 
@@ -389,7 +419,7 @@ elif page == "Event Deployment":
         st.subheader("Contact List for Assigned Volunteers")
         
         # User can manually edit the selected volunteers
-        default_selections = st.session_state.draft_vols
+        default_selections = [v for v in st.session_state.draft_vols if v in local_pool['Volunteer_ID'].tolist()]
         if not default_selections:
             st.warning("⚠️ Could not extract specific volunteer IDs from AI output. Please select manually:")
             default_selections = local_pool['Volunteer_ID'].head(target_count).tolist()
@@ -403,23 +433,14 @@ elif page == "Event Deployment":
         )
         
         if selected_vols:
-            contacts = df[df['Volunteer_ID'].isin(selected_vols)][['Volunteer_ID','Full_Name','Type','Phone_Number','Email','Skills','Has_Vehicle','Neighborhood']].copy()
+            contacts = df[df['Volunteer_ID'].isin(selected_vols)][['Volunteer_ID','Full_Name','Type','Phone_Number','Skills','Neighborhood']].copy()
             
             # ═══ ADD WHATSAPP LINKS ═══
-            def generate_whatsapp_link(row):
-                try:
-                    phone = str(row['Phone_Number']).replace('+', '').replace('-', '').replace(' ', '').replace('(', '').replace(')', '')
-                    if not phone.startswith('+'):
-                        phone = '+91' + phone if len(phone) == 10 else '+' + phone
-                    else:
-                        phone = '+' + phone.lstrip('+')
-                    
-                    message = f"Hi {row['Full_Name']}, you have been selected for {event_name} on {event_date}. Please confirm your availability. Thank you!"
-                    return f"https://wa.me/{phone}?text={message.replace(' ', '%20')}"
-                except:
-                    return ""
-            
-            contacts['WhatsApp_Link'] = contacts.apply(generate_whatsapp_link, axis=1)
+            contacts['WhatsApp_Link'] = contacts.apply(
+                lambda row: generate_whatsapp_link(
+                    row['Phone_Number'], 
+                    f"Hi {row['Full_Name']}, you have been selected for {event_name} on {event_date}. Please confirm your availability. Thank you!"
+                ), axis=1)
             
             st.dataframe(
                 contacts,
@@ -450,6 +471,12 @@ elif page == "Event Deployment":
                         'plan': st.session_state.draft_plan,
                         'created_at': datetime.now().isoformat()
                     }
+                    
+                    # Mark fulfilled shadow requests
+                    for req in st.session_state.shadow_requests:
+                        if req['status'] == 'Pending' and req['learner_id'] in selected_vols and req['expert_id'] in selected_vols:
+                            req['status'] = f'Fulfilled (Event {event_id})'
+
                     st.session_state.draft_plan = None
                     st.session_state.draft_vols = []
                     st.success(f"✅ Event {event_id} successfully saved!")
@@ -559,7 +586,7 @@ elif page == "Career Growth Hub":
                     st.success(eval_res)
 
 # ════════════════════════════════════════════════════════════════════════════
-#  04 · VOLUNTEER ANALYTICS
+#  04 · VOLUNTEER ANALYTICS (Admin Interactions Added)
 # ════════════════════════════════════════════════════════════════════════════
 elif page == "Volunteer Analytics":
     st.title("Volunteer Analytics")
@@ -614,14 +641,19 @@ elif page == "Volunteer Analytics":
             fig_cr.update_layout(margin=dict(t=0, b=0, l=0, r=0), height=200)
             st.plotly_chart(fig_cr, use_container_width=True)
         with cc2:
-            st.dataframe(churn[['Volunteer_ID','Full_Name','Type','Neighborhood','Attendance_Rate']], use_container_width=True, hide_index=True, height=340)
-
-        if len(churn) > 0:
-            if st.button("Generate Re-engagement Strategy", type="primary", key="churn_btn"):
-                with st.spinner("Building strategy..."):
-                    ai_out = call_ai(f"We have {len(churn)} at-risk volunteers. Draft check-in message and 3 retention tactics.", model=MODEL_LARGE)
-                    st.info("Strategy Generated")
-                    st.markdown(ai_out)
+            st.write("**Direct Action: Nudge At-Risk Volunteers**")
+            churn_display = churn[['Volunteer_ID','Full_Name','Type','Phone_Number','Attendance_Rate']].copy()
+            churn_display['Quick_Message'] = churn_display.apply(
+                lambda row: generate_whatsapp_link(row['Phone_Number'], f"Hi {row['Full_Name']}, we missed you at recent events! We value your help at the NGO and hope to see you soon. Let us know if you need anything."), 
+                axis=1
+            )
+            st.dataframe(
+                churn_display, 
+                use_container_width=True, 
+                hide_index=True, 
+                height=340,
+                column_config={"Quick_Message": st.column_config.LinkColumn("Message", display_text="📱 Reach Out")}
+            )
 
     with t3:
         st.subheader("Top Performers Recognition")
@@ -637,14 +669,19 @@ elif page == "Volunteer Analytics":
             fig_p.update_layout(title='Top Attendance Scores', margin=dict(t=30, b=0, l=0, r=0), height=220)
             st.plotly_chart(fig_p, use_container_width=True)
         with pp2:
-            st.dataframe(candidates[['Volunteer_ID','Full_Name','Type','Neighborhood','Attendance_Rate']], use_container_width=True, hide_index=True, height=340)
-
-        if len(candidates) > 0:
-            if st.button("Draft Recognition Briefing", type="primary", key="promo_btn"):
-                with st.spinner("Drafting briefing..."):
-                    ai_out = call_ai(f"Top performing volunteers (attendance >= {p_thresh}%). Draft thank you email and recognition brief.", model=MODEL_LARGE)
-                    st.info("Briefing Generated")
-                    st.markdown(ai_out)
+            st.write("**Direct Action: Congratulate Top Performers**")
+            top_display = candidates[['Volunteer_ID','Full_Name','Type','Phone_Number','Attendance_Rate']].copy()
+            top_display['Quick_Message'] = top_display.apply(
+                lambda row: generate_whatsapp_link(row['Phone_Number'], f"Hi {row['Full_Name']}, thank you for being a top performer at our NGO! Your dedication is truly inspiring."), 
+                axis=1
+            )
+            st.dataframe(
+                top_display, 
+                use_container_width=True, 
+                hide_index=True, 
+                height=340,
+                column_config={"Quick_Message": st.column_config.LinkColumn("Message", display_text="🌟 Congratulate")}
+            )
 
 # ════════════════════════════════════════════════════════════════════════════
 #  05 · AI ASSISTANT
@@ -654,15 +691,10 @@ elif page == "AI Assistant":
     st.write("Chat with an AI assistant that understands your workforce data.")
 
     # GRANULAR CONTEXT: Provide enough data to avoid hallucinations
-    # 1. Regional Summary
     region_ctx = df.groupby('Neighborhood').agg(Count=('Volunteer_ID','count'), Avg_Att=('Att_Float','mean')).reset_index().to_csv(index=False)
-    
-    # 2. ALL Interns (Usually ~60-70 people, fits easily in context)
     intern_list = df[df['Type'] == 'Intern'].sort_values('Att_Float', ascending=False)[
         ['Volunteer_ID', 'Full_Name', 'Attendance_Rate', 'Neighborhood', 'Skills']
     ].to_csv(index=False)
-
-    # 3. Top 30 Volunteers
     top_vols = df[df['Type'] == 'Volunteer'].sort_values('Att_Float', ascending=False).head(30)[
         ['Volunteer_ID', 'Full_Name', 'Attendance_Rate', 'Neighborhood', 'Skills']
     ].to_csv(index=False)
@@ -695,7 +727,6 @@ STRICT RULES:
         with st.chat_message("user"):
             st.markdown(prompt)
         with st.chat_message("assistant"):
-            # Use MODEL_LARGE for data queries to ensure zero hallucinations
             ai_reply = call_ai(prompt, SYSTEM, model=MODEL_LARGE)
             st.markdown(ai_reply)
             st.session_state.cop_msgs.append({"role": "assistant", "content": ai_reply})
@@ -766,7 +797,6 @@ elif page == "Event Transparency":
         st.subheader("📈 Participation & Fairness Analytics")
         
         if st.session_state.event_history:
-            # Participation counts
             participation = {}
             for event_rec in st.session_state.event_history:
                 for vol_id in event_rec.get('attendees', []):
@@ -806,7 +836,6 @@ elif page == "Volunteer View":
     st.title("🙋 Volunteer Portal")
     st.write("Your personalized volunteer dashboard with event opportunities and growth paths.")
     
-    # Simulate login as specific volunteer
     st.subheader("👤 Login as Volunteer")
     logged_in_volunteer = st.selectbox(
         "Select your name:",
@@ -817,7 +846,7 @@ elif page == "Volunteer View":
     if logged_in_volunteer:
         vol_record = df[df['Full_Name'] == logged_in_volunteer].iloc[0]
         
-        vt1, vt2, vt3 = st.tabs(["📋 My Profile & History", "📅 Open Events", "🎓 Cross-Skill & Shadowing"])
+        vt1, vt2, vt3 = st.tabs(["📋 My Profile & History", "📅 Open Events", "🎓 Shadowing & Cross-Skill Learning"])
         
         with vt1:
             st.subheader(f"Profile: {logged_in_volunteer}")
@@ -829,15 +858,12 @@ elif page == "Volunteer View":
                 st.write(f"**ID:** {vol_record['Volunteer_ID']}")
                 st.write(f"**Type:** {vol_record['Type']}")
                 st.write(f"**Neighborhood:** {vol_record['Neighborhood']}")
-                st.write(f"**Phone:** {vol_record['Phone_Number']}")
-                st.write(f"**Email:** {vol_record['Email']}")
             
             with col_p2:
                 st.markdown("**Performance Metrics**")
                 st.metric("Attendance Rate", vol_record['Attendance_Rate'])
                 st.metric("Events Attended", vol_record['Event_Count'])
                 st.metric("Has Vehicle", "✅ Yes" if vol_record['Has_Vehicle'] == 'Yes' else "❌ No")
-                st.metric("Preferred Days", vol_record['Preferred_Days'])
             
             st.divider()
             st.markdown("**Current Skills**")
@@ -848,18 +874,9 @@ elif page == "Volunteer View":
             else:
                 st.write("No skills listed")
             
-            st.markdown("**Interests**")
-            interests_list = [i.strip() for i in str(vol_record['Interests']).split(';') if i.strip()]
-            if interests_list:
-                interest_pills = " | ".join([f"❤️ {interest}" for interest in interests_list])
-                st.write(interest_pills)
-            else:
-                st.write("No interests listed")
-            
             st.divider()
-            st.markdown("**📊 Event History**")
+            st.markdown("**📊 My Event History**")
             
-            # Get events this volunteer attended
             attended_events = []
             for event_rec in st.session_state.event_history:
                 if vol_record['Volunteer_ID'] in event_rec['attendees']:
@@ -884,12 +901,10 @@ elif page == "Volunteer View":
                     is_assigned = vol_record['Volunteer_ID'] in evt_data['assigned_volunteers']
                     
                     col_e1, col_e2 = st.columns([4, 1])
-                    
                     with col_e1:
                         status_badge = "✅ You're Assigned!" if is_assigned else "🟡 Open"
                         st.markdown(f"### {evt_data['name']} {status_badge}")
-                        st.write(f"**When:** {evt_data['date']}")
-                        st.write(f"**Where:** {evt_data['neighborhood']}")
+                        st.write(f"**When:** {evt_data['date']} | **Where:** {evt_data['neighborhood']}")
                         st.write(f"**Skills Needed:** {evt_data['required_skills']}")
                     
                     with col_e2:
@@ -897,64 +912,84 @@ elif page == "Volunteer View":
                             st.success("Assigned")
                         else:
                             st.info("Available")
-                    
                     st.divider()
             else:
                 st.info("No open events at this time. Check back soon!")
         
         with vt3:
-            st.subheader("🎓 Cross-Skill Development & Peer Learning")
-            st.write("Learn new skills by shadowing experts or teaching others.")
+            st.subheader("🎓 What is Shadowing?")
+            st.info("""
+            **Shadowing** means you attend an event specifically to learn a new skill from an expert volunteer. 
+            You will act as their assistant, watch how they handle tasks, and get real-world experience without the pressure of doing it alone!
+            """)
             
-            learning_skill = st.text_input(
-                "What skill would you like to learn?",
-                placeholder="e.g., Java, Data Analysis, Project Management",
-                key="learning_skill_input"
-            )
-            
-            if learning_skill and st.button("🔍 Find Peer Learning Matches", type="primary"):
-                with st.spinner("Finding experts to learn from..."):
-                    
-                    # Find volunteers with the skill
-                    experts = []
-                    for _, expert in df.iterrows():
-                        if learning_skill.lower() in str(expert['Skills']).lower():
-                            if expert['Volunteer_ID'] != vol_record['Volunteer_ID']:
-                                experts.append(expert)
-                    
-                    if experts:
-                        st.success(f"✅ Found {len(experts)} potential expert(s) to learn from!")
-                        
-                        for expert in experts[:5]:  # Show top 5
-                            with st.expander(f"👨‍🏫 {expert['Full_Name']} - Events Attended: {expert['Event_Count']}", expanded=False):
-                                st.write(f"**Neighborhood:** {expert['Neighborhood']}")
-                                st.write(f"**Expertise:** {expert['Skills']}")
-                                st.write(f"**Availability:** {expert['Preferred_Days']}")
-                                st.write(f"**Experience Level:** {'Expert (High Participation)' if expert['Event_Count'] >= 5 else 'Experienced' if expert['Event_Count'] >= 3 else 'Intermediate'}")
-                                
-                                if st.button(f"Request Shadow Role with {expert['Full_Name']}", key=f"shadow_{expert['Volunteer_ID']}"):
-                                    st.success(f"✅ Shadow request sent! Admin will pair you for the next event.")
-                        
-                        st.divider()
-                        st.markdown("**💡 How Shadowing Works:**")
-                        st.markdown("""
-                        1. **Match:** We pair you with an expert in your desired skill
-                        2. **Event Assignment:** You'll both be assigned to the same event
-                        3. **Learn:** Work alongside the expert during the event
-                        4. **Feedback:** Get personalized insights to accelerate your growth
-                        """)
+            # Show My Shadowing Status
+            my_shadow_requests = [req for req in st.session_state.shadow_requests if req['learner_id'] == vol_record['Volunteer_ID']]
+            if my_shadow_requests:
+                st.markdown("**Your Learning Requests:**")
+                for req in my_shadow_requests:
+                    if req['status'] == 'Pending':
+                        st.warning(f"🕒 **Pending:** Waiting to shadow **{req['expert_name']}** for **{req['skill']}**. (Admin will pair you in an upcoming event!)")
                     else:
-                        st.warning(f"❌ No experts found for '{learning_skill}' yet. Try another skill or check back later!")
+                        st.success(f"✅ **Completed:** Shadowed **{req['expert_name']}** for **{req['skill']}** ({req['status']})")
+                st.divider()
+
+            st.markdown("### Find an Expert to Learn From")
+            st.text_input(
+                "What skill would you like to learn?",
+                placeholder="e.g., Java, First Aid, Teaching",
+                value=st.session_state.learning_skill_input,
+                key="learning_skill_widget"
+            )
+            # Sync the widget value back to session state to process search
+            st.session_state.learning_skill_input = st.session_state.learning_skill_widget
             
-            st.divider()
-            st.markdown("**📚 Popular Skills to Learn:**")
+            # Extract skills for quick buttons
             all_skills = set()
             for skills_str in df['Skills'].dropna():
                 all_skills.update([s.strip() for s in str(skills_str).split(';')])
             
+            st.markdown("**Or click a popular skill below:**")
             skill_cols = st.columns(4)
             for idx, skill in enumerate(sorted(all_skills)[:12]):
                 with skill_cols[idx % 4]:
-                    if st.button(skill, key=f"skill_{skill}"):
-                        st.session_state.learning_skill_input = skill
-                        st.rerun()
+                    # Using callback to avoid exception
+                    st.button(skill, key=f"btn_{idx}", on_click=set_learning_skill, args=(skill,))
+
+            if st.session_state.learning_skill_input:
+                current_skill = st.session_state.learning_skill_input
+                with st.spinner("Finding experts..."):
+                    experts = []
+                    for _, expert in df.iterrows():
+                        if current_skill.lower() in str(expert['Skills']).lower():
+                            if expert['Volunteer_ID'] != vol_record['Volunteer_ID']:
+                                experts.append(expert)
+                    
+                    if experts:
+                        st.success(f"✅ Found {len(experts)} potential expert(s) who know '{current_skill}'!")
+                        
+                        for expert in experts[:5]: 
+                            with st.expander(f"👨‍🏫 {expert['Full_Name']} - Events Attended: {expert['Event_Count']}", expanded=False):
+                                st.write(f"**Neighborhood:** {expert['Neighborhood']}")
+                                st.write(f"**Expertise:** {expert['Skills']}")
+                                st.write(f"**Experience Level:** {'Expert (High Participation)' if expert['Event_Count'] >= 5 else 'Experienced' if expert['Event_Count'] >= 3 else 'Intermediate'}")
+                                
+                                # Check if already requested
+                                already_requested = any(req['expert_id'] == expert['Volunteer_ID'] and req['skill'] == current_skill and req['status'] == 'Pending' for req in my_shadow_requests)
+                                
+                                if already_requested:
+                                    st.info("🕒 You have already requested to shadow this expert.")
+                                else:
+                                    if st.button(f"Request to Shadow {expert['Full_Name']}", key=f"shadow_{expert['Volunteer_ID']}"):
+                                        st.session_state.shadow_requests.append({
+                                            'learner_id': vol_record['Volunteer_ID'],
+                                            'learner_name': vol_record['Full_Name'],
+                                            'expert_id': expert['Volunteer_ID'],
+                                            'expert_name': expert['Full_Name'],
+                                            'skill': current_skill,
+                                            'status': 'Pending'
+                                        })
+                                        st.success(f"✅ Request sent! Admin will try to pair you with {expert['Full_Name']} in an upcoming event.")
+                                        st.rerun()
+                    else:
+                        st.warning(f"❌ No experts found for '{current_skill}' yet. Try another skill.")
