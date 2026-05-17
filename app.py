@@ -16,6 +16,14 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+# ═══ CRITICAL: Initialize Session State First ═══
+if "active_events" not in st.session_state:
+    st.session_state.active_events = {}
+if "event_history" not in st.session_state:
+    st.session_state.event_history = []
+if "cop_msgs" not in st.session_state:
+    st.session_state.cop_msgs = []
+
 # ─── NEIGHBORHOOD COORDS (Delhi) ─────────────────────────────────────────────
 NBHD_COORDS = {
     'Paschim Vihar':   (28.6685, 77.0946),
@@ -158,12 +166,6 @@ try:
 except Exception as e:
     st.error(f"Error processing the CSV file: {e}")
     st.stop()
-
-# ═══ SESSION STATE INITIALIZATION FOR NEW FEATURES ═══
-if "active_events" not in st.session_state:
-    st.session_state.active_events = {}
-if "event_history" not in st.session_state:
-    st.session_state.event_history = []
 
 # Calculate event_count per volunteer from history
 event_counts = {}
@@ -378,12 +380,25 @@ Gaps, insufficient pool warnings, cross-region recommendations.
         # Extract volunteer IDs from AI output (try multiple patterns)
         found = list(set(re.findall(r'V-\d{3}', ai_out)))
         
+        st.write(f"🔍 **ID Extraction Debug:** Found {len(found)} volunteer IDs from AI output")
+        
         # Fallback: if no matches, try to get top volunteers from pool
         if not found:
-            st.warning("⚠️ Could not extract specific volunteer IDs from AI output. Selecting from available pool...")
-            found = local_pool['Volunteer_ID'].head(min(target_count * 2, len(local_pool))).tolist()
+            st.warning("⚠️ Could not extract specific volunteer IDs from AI output. Please select volunteers manually below.")
+            
+            # Manual selection interface
+            st.markdown("**Select volunteers for this event:**")
+            selected_volunteers = st.multiselect(
+                "Choose volunteers:",
+                options=local_pool['Volunteer_ID'].tolist(),
+                default=local_pool['Volunteer_ID'].head(min(target_count * 2, len(local_pool))).tolist(),
+                format_func=lambda vid: f"{vid} - {local_pool[local_pool['Volunteer_ID']==vid]['Full_Name'].values[0] if len(local_pool[local_pool['Volunteer_ID']==vid]) > 0 else 'Unknown'}",
+                key="manual_volunteer_select"
+            )
+            found = selected_volunteers
         
         if found:
+            st.success(f"✅ {len(found)} volunteers selected for deployment")
             contacts = df[df['Volunteer_ID'].isin(found)][['Volunteer_ID','Full_Name','Type','Phone_Number','Email','Skills','Has_Vehicle','Neighborhood']].copy()
             
             if len(contacts) > 0:
@@ -416,47 +431,57 @@ Gaps, insufficient pool warnings, cross-region recommendations.
                         )
                     }
                 )
+            else:
+                st.error("❌ Selected volunteers not found in database")
+                found = []
+        else:
+            st.error("❌ No volunteers selected. Please select at least one volunteer above.")
         
         st.divider()
         st.subheader("💾 Save & Publish Event")
         
-        col_save, col_complete = st.columns([1, 1])
-        
-        with col_save:
-            if st.button("Save Event & Publish", type="primary", key="save_event_btn"):
-                event_id = f"EVT_{len(st.session_state.active_events) + 1:03d}"
-                st.session_state.active_events[event_id] = {
-                    'name': event_name,
-                    'date': event_date,
-                    'neighborhood': sel_nbhd,
-                    'target_count': target_count,
-                    'required_skills': req_skills,
-                    'vehicle_required': req_vehicle,
-                    'assigned_volunteers': found,
-                    'plan': ai_out,
-                    'created_at': datetime.now().isoformat()
-                }
-                st.success(f"✅ Event saved and published! Event ID: {event_id}")
-                st.balloons()
-        
-        with col_complete:
-            if st.session_state.active_events:
-                event_to_close = st.selectbox(
-                    "Select an active event to close:",
-                    list(st.session_state.active_events.keys()),
-                    key="close_event_select"
-                )
-                if st.button("Close/Complete Event", key="close_event_btn"):
-                    event_data = st.session_state.active_events.pop(event_to_close)
-                    completed_event = {
-                        'event_id': event_to_close,
-                        **event_data,
-                        'completed_at': datetime.now().isoformat(),
-                        'attendees': event_data['assigned_volunteers']
+        # Only show save button if we have volunteers
+        if found and len(found) > 0:
+            col_save, col_complete = st.columns([1, 1])
+            
+            with col_save:
+                if st.button("Save Event & Publish", type="primary", key="save_event_btn"):
+                    event_id = f"EVT_{len(st.session_state.active_events) + 1:03d}"
+                    st.session_state.active_events[event_id] = {
+                        'name': event_name,
+                        'date': event_date,
+                        'neighborhood': sel_nbhd,
+                        'target_count': target_count,
+                        'required_skills': req_skills,
+                        'vehicle_required': req_vehicle,
+                        'assigned_volunteers': found,
+                        'plan': ai_out,
+                        'created_at': datetime.now().isoformat()
                     }
-                    st.session_state.event_history.append(completed_event)
-                    st.success(f"✅ Event {event_to_close} completed and archived!")
-                    st.rerun()
+                    st.success(f"✅ Event saved and published! Event ID: {event_id}")
+                    st.info(f"📊 Event details stored. Active events: {len(st.session_state.active_events)}")
+                    st.balloons()
+            
+            with col_complete:
+                if st.session_state.active_events:
+                    event_to_close = st.selectbox(
+                        "Select an active event to close:",
+                        list(st.session_state.active_events.keys()),
+                        key="close_event_select"
+                    )
+                    if st.button("Close/Complete Event", key="close_event_btn"):
+                        event_data = st.session_state.active_events.pop(event_to_close)
+                        completed_event = {
+                            'event_id': event_to_close,
+                            **event_data,
+                            'completed_at': datetime.now().isoformat(),
+                            'attendees': event_data['assigned_volunteers']
+                        }
+                        st.session_state.event_history.append(completed_event)
+                        st.success(f"✅ Event {event_to_close} completed and archived!")
+                        st.rerun()
+        else:
+            st.warning("⚠️ Please select volunteers above before saving the event.")
         
         st.divider()
         st.subheader("Active & Historical Events Summary")
@@ -663,9 +688,6 @@ STRICT RULES:
 4. If asked for "90%+" and someone is in the list with that score, list them.
 5. Accuracy is more important than speed."""
 
-    if "cop_msgs" not in st.session_state:
-        st.session_state.cop_msgs = []
-
     for msg in st.session_state.cop_msgs:
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
@@ -698,8 +720,45 @@ elif page == "Event Transparency":
     st.title("📊 Event Transparency Dashboard")
     st.write("Track all active and historical events with volunteer participation metrics.")
     
-    # Debug display
+    # Debug display - show session state status
+    with st.expander("🔍 Session Debug Info", expanded=False):
+        st.write(f"**Active Events Count:** {len(st.session_state.active_events)}")
+        st.write(f"**Completed Events Count:** {len(st.session_state.event_history)}")
+        if st.session_state.active_events:
+            st.write("**Active Event IDs:**")
+            for evt_id in st.session_state.active_events.keys():
+                st.write(f"  - {evt_id}")
+        if st.session_state.event_history:
+            st.write("**Completed Event IDs:**")
+            for evt in st.session_state.event_history:
+                st.write(f"  - {evt['event_id']}")
+    
     st.info(f"📊 Current Session: {len(st.session_state.active_events)} active | {len(st.session_state.event_history)} completed")
+    
+    # Test event creator (for debugging)
+    with st.expander("➕ Create Test Event (Debugging)"):
+        test_col1, test_col2 = st.columns(2)
+        with test_col1:
+            test_event_name = st.text_input("Test Event Name", value="Test Medical Camp", key="test_event_name")
+        with test_col2:
+            test_volunteers = st.number_input("Number of volunteers", min_value=1, value=5, key="test_volunteers")
+        
+        if st.button("Create Test Event", key="test_create_btn"):
+            test_event_id = f"EVT_{len(st.session_state.active_events) + 1:03d}"
+            test_selected_vols = df['Volunteer_ID'].head(test_volunteers).tolist()
+            st.session_state.active_events[test_event_id] = {
+                'name': test_event_name,
+                'date': 'Test Date',
+                'neighborhood': 'Paschim Vihar',
+                'target_count': test_volunteers,
+                'required_skills': 'Test Skills',
+                'vehicle_required': False,
+                'assigned_volunteers': test_selected_vols,
+                'plan': 'Test Plan',
+                'created_at': datetime.now().isoformat()
+            }
+            st.success(f"✅ Test event {test_event_id} created with {len(test_selected_vols)} volunteers!")
+            st.rerun()
     
     t1, t2, t3 = st.tabs(["Active Events", "Event History", "Participation Analytics"])
     
